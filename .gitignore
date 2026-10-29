@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Test / coverage output
+coverage/
+
+# Logs and runtime artifacts
+logs/
+*.log
+npm-debug.log*
+
+# Local session data — never commit live worker/session state
+sessions/
+*.session.json
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.local
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+tmp/
+.tmp/

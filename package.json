@@ -1,0 +1,36 @@
+{
+  "name": "agent-session-bridge",
+  "version": "0.1.0",
+  "description": "Lightweight local MCP server that will bridge Codex main sessions to runtime workers.",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "smoke": "npm run build && vitest run tests/mcp-smoke.test.ts",
+    "start": "node dist/index.js"
+  },
+  "keywords": [
+    "mcp",
+    "codex",
+    "agent"
+  ],
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@modelcontextprotocol/server": "^2.4.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "^2.4.0",
+    "@types/node": "^26.6.6",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  }
+}
