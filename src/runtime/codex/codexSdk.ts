@@ -1,16 +1,27 @@
 import { Codex } from '@openai/codex-sdk';
-import type { CodexOptions, RunResult, ThreadOptions } from '@openai/codex-sdk';
+import type {
+  CodexOptions,
+  RunResult,
+  RunStreamedResult,
+  ThreadEvent,
+  ThreadOptions,
+  Usage,
+} from '@openai/codex-sdk';
 
-export type { CodexOptions, RunResult, ThreadOptions };
+export type { CodexOptions, RunResult, RunStreamedResult, ThreadEvent, ThreadOptions, Usage };
 
 /**
  * Minimal structural surface the adapter needs from a Codex thread. The real
  * SDK `Thread` satisfies this; tests inject fakes. `id` is `null` until the
  * first `thread.started` event arrives during a run.
+ *
+ * `runStreamed` yields SDK thread events. Those events do not include a
+ * native turn id; the bridge correlates a turn with its own task id.
  */
 export interface CodexThreadLike {
   readonly id: string | null;
   run(input: string): Promise<RunResult>;
+  runStreamed(input: string): Promise<RunStreamedResult>;
 }
 
 /**

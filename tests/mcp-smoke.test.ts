@@ -5,6 +5,9 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+const TSX_CLI = fileURLToPath(new URL('../node_modules/tsx/dist/cli.mjs', import.meta.url));
+const FAKE_SERVER = fileURLToPath(new URL('./support/fakeStdioServer.ts', import.meta.url));
 import { afterEach, describe, expect, it } from 'vitest';
 
 const SERVER_ENTRY = fileURLToPath(new URL('../dist/index.js', import.meta.url));
@@ -42,9 +45,22 @@ async function waitForExit(pid: number, timeoutMs = 5000): Promise<boolean> {
 }
 
 async function spawnServer(dataDir: string, extraEnv: Record<string, string> = {}) {
+  return spawnProcess(process.execPath, [SERVER_ENTRY], dataDir, extraEnv);
+}
+
+async function spawnFakeServer(dataDir: string, extraEnv: Record<string, string> = {}) {
+  return spawnProcess(process.execPath, [TSX_CLI, FAKE_SERVER], dataDir, extraEnv);
+}
+
+async function spawnProcess(
+  command: string,
+  args: string[],
+  dataDir: string,
+  extraEnv: Record<string, string>,
+) {
   const transport = new StdioClientTransport({
-    command: process.execPath,
-    args: [SERVER_ENTRY],
+    command,
+    args,
     stderr: 'pipe',
     env: {
       ...process.env,
@@ -72,7 +88,7 @@ describe('MCP stdio smoke test', () => {
       try {
         expect(client.getServerVersion()).toEqual({
           name: 'agent-session-bridge',
-          version: '0.2.0',
+          version: '0.3.0',
         });
         await client.ping();
 
@@ -80,6 +96,9 @@ describe('MCP stdio smoke test', () => {
         expect(tools.map((t) => t.name).sort()).toEqual([
           'bridge_status',
           'create_worker',
+          'dispatch_worker_task',
+          'get_task_result',
+          'get_task_status',
           'get_worker',
           'list_workers',
           'send_worker_message',
@@ -165,6 +184,209 @@ describe('MCP stdio smoke test', () => {
       } finally {
         await second.client.close();
         await waitForExit(second.pid);
+      }
+    },
+  );
+
+  it(
+    'reads a completed task after restart and marks a non-terminal task unknown without calling a model',
+    { timeout: 30000 },
+    async () => {
+      const dataDir = await tempDataDir();
+      const now = new Date().toISOString();
+      await writeFile(
+        join(dataDir, 'workers.json'),
+        JSON.stringify({
+          schemaVersion: 1,
+          workers: [
+            {
+              workerId: 'wrk_restart1',
+              name: 'restored',
+              runtime: 'codex',
+              threadId: 'thread_from_past_life',
+              workspacePath: 'E:\\Projects\\agent-session-bridge',
+              state: 'ready',
+              createdAt: now,
+              updatedAt: now,
+            },
+          ],
+        }),
+        'utf8',
+      );
+      await writeFile(
+        join(dataDir, 'tasks.json'),
+        JSON.stringify({
+          schemaVersion: 1,
+          tasks: [
+            {
+              taskId: 'task_done',
+              workerId: 'wrk_restart1',
+              requestKey: 'done',
+              requestFingerprint: 'abc',
+              status: 'completed',
+              createdAt: now,
+              startedAt: now,
+              updatedAt: now,
+              completedAt: now,
+              nativeThreadId: 'thread_from_past_life',
+              progress: [{ at: now, kind: 'turn.completed', summary: 'turn completed' }],
+              result: 'stored reply',
+              usage: {
+                input_tokens: 8,
+                cached_input_tokens: 0,
+                cache_write_input_tokens: 0,
+                output_tokens: 4,
+                reasoning_output_tokens: 0,
+              },
+              error: null,
+            },
+            {
+              taskId: 'task_open',
+              workerId: 'wrk_restart1',
+              requestKey: 'open',
+              requestFingerprint: 'def',
+              status: 'running',
+              createdAt: now,
+              startedAt: now,
+              updatedAt: now,
+              completedAt: null,
+              nativeThreadId: null,
+              progress: [],
+              result: null,
+              usage: null,
+              error: null,
+            },
+          ],
+        }),
+        'utf8',
+      );
+
+      const server = await spawnServer(dataDir);
+      try {
+        const done = await server.client.callTool({
+          name: 'get_task_result',
+          arguments: { taskId: 'task_done' },
+        });
+        expect(done.structuredContent).toMatchObject({
+          status: 'completed',
+          response: 'stored reply',
+          nativeThreadId: 'thread_from_past_life',
+          association: 'confirmed',
+          usage: { input_tokens: 8, output_tokens: 4 },
+        });
+        const open = await server.client.callTool({
+          name: 'get_task_result',
+          arguments: { taskId: 'task_open' },
+        });
+        expect(open.structuredContent).toMatchObject({
+          status: 'unknown',
+          response: null,
+          error: { category: 'interrupted' },
+        });
+      } finally {
+        await server.client.close();
+        await waitForExit(server.pid);
+      }
+    },
+  );
+
+  it(
+    'completes an async task inside one fake MCP process and reads it after restart',
+    { timeout: 30000 },
+    async () => {
+      const dataDir = await tempDataDir();
+      const first = await spawnFakeServer(dataDir, { AGENT_SESSION_BRIDGE_STREAM_DELAY_MS: '200' });
+      let taskId = '';
+      try {
+        const created = await first.client.callTool({
+          name: 'create_worker',
+          arguments: { name: 'proc', workspacePath: 'E:\\ws' },
+        });
+        const workerId = (created.structuredContent as { worker: { workerId: string } }).worker.workerId;
+        const dispatched = await first.client.callTool({
+          name: 'dispatch_worker_task',
+          arguments: { workerId, message: 'process task', requestKey: 'proc-1' },
+        });
+        expect(dispatched.structuredContent).toMatchObject({ status: 'accepted', replayed: false });
+        expect(processAlive(first.pid)).toBe(true);
+        taskId = (dispatched.structuredContent as { taskId: string }).taskId;
+
+        let sawRunning = false;
+        let status = '';
+        for (let attempt = 0; attempt < 40 && status !== 'completed'; attempt += 1) {
+          const current = await first.client.callTool({
+            name: 'get_task_status',
+            arguments: { taskId },
+          });
+          status = (current.structuredContent as { status: string }).status;
+          if (status === 'running') sawRunning = true;
+          if (status !== 'completed') await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        expect(sawRunning).toBe(true);
+        const result = await first.client.callTool({
+          name: 'get_task_result',
+          arguments: { taskId },
+        });
+        expect(result.structuredContent).toMatchObject({
+          status: 'completed',
+          response: 'FAKE_ASYNC:process task',
+        });
+        expect(processAlive(first.pid)).toBe(true);
+      } finally {
+        await first.client.close();
+        await waitForExit(first.pid);
+      }
+
+      const second = await spawnFakeServer(dataDir);
+      try {
+        const again = await second.client.callTool({
+          name: 'get_task_result',
+          arguments: { taskId },
+        });
+        expect(again.structuredContent).toMatchObject({
+          status: 'completed',
+          response: 'FAKE_ASYNC:process task',
+        });
+      } finally {
+        await second.client.close();
+        await waitForExit(second.pid);
+      }
+    },
+  );
+
+  it(
+    'marks an in-flight task unknown when the MCP client disconnects',
+    { timeout: 30000 },
+    async () => {
+      const dataDir = await tempDataDir();
+      const server = await spawnFakeServer(dataDir, { AGENT_SESSION_BRIDGE_STREAM_DELAY_MS: '5000' });
+      const created = await server.client.callTool({
+        name: 'create_worker',
+        arguments: { name: 'proc', workspacePath: 'E:\\ws' },
+      });
+      const workerId = (created.structuredContent as { worker: { workerId: string } }).worker.workerId;
+      const dispatched = await server.client.callTool({
+        name: 'dispatch_worker_task',
+        arguments: { workerId, message: 'do not outlive the client', requestKey: 'proc-stop' },
+      });
+      const taskId = (dispatched.structuredContent as { taskId: string }).taskId;
+      expect(processAlive(server.pid)).toBe(true);
+      await server.client.close();
+      expect(await waitForExit(server.pid)).toBe(true);
+
+      const restarted = await spawnFakeServer(dataDir);
+      try {
+        const result = await restarted.client.callTool({
+          name: 'get_task_result',
+          arguments: { taskId },
+        });
+        expect(result.structuredContent).toMatchObject({
+          status: 'unknown',
+          response: null,
+        });
+      } finally {
+        await restarted.client.close();
+        await waitForExit(restarted.pid);
       }
     },
   );

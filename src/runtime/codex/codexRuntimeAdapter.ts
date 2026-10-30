@@ -2,15 +2,18 @@ import { randomUUID } from 'node:crypto';
 import type {
   AgentRuntimeAdapter,
   CreateSessionInput,
+  RuntimeStreamEvent,
 } from '../../contracts/runtime.js';
 import type { WorkerSession } from '../../contracts/session.js';
-import type { AgentTask, TaskResult } from '../../contracts/task.js';
+import type { AgentTask, TaskResult, TaskUsage } from '../../contracts/task.js';
 import {
   createCodexSdk,
   type CodexOptions,
   type CodexSdkLike,
   type CodexThreadLike,
+  type ThreadEvent,
   type ThreadOptions,
+  type Usage,
 } from './codexSdk.js';
 
 export class CodexAdapterError extends Error {
@@ -130,6 +133,45 @@ export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
     }
   }
 
+  /**
+   * Stream one turn. The caller owns task persistence; this method only
+   * maps SDK events and keeps the per-session running flag. Assistant text
+   * is forwarded only for `agent_message` completions — command output and
+   * other item payloads stay inside the SDK process.
+   */
+  async *runTaskStreamed(sessionId: string, task: AgentTask): AsyncGenerator<RuntimeStreamEvent> {
+    const entry = this.sessions.get(sessionId);
+    if (!entry) {
+      throw new CodexAdapterError('SESSION_NOT_FOUND', `Unknown session ${sessionId}`);
+    }
+    if (entry.running) {
+      throw new CodexAdapterError('SESSION_BUSY', `Session ${sessionId} is already running`);
+    }
+
+    entry.running = true;
+    entry.session.status = 'busy';
+    try {
+      const streamed = await entry.thread.runStreamed(task.prompt);
+      for await (const event of streamed.events) {
+        if (event.type === 'thread.started' && event.thread_id) {
+          entry.session.externalSessionId = event.thread_id;
+        }
+        const mapped = mapThreadEvent(event);
+        if (mapped) yield mapped;
+      }
+      if (entry.thread.id) entry.session.externalSessionId = entry.thread.id;
+      entry.session.status = 'ready';
+      entry.session.lastActivityAt = new Date().toISOString();
+    } catch (error) {
+      if (entry.thread.id) entry.session.externalSessionId = entry.thread.id;
+      entry.session.status = 'failed';
+      entry.session.lastActivityAt = new Date().toISOString();
+      throw error;
+    } finally {
+      entry.running = false;
+    }
+  }
+
   /** Current snapshot of a live session (undefined if unknown). */
   getSession(sessionId: string): WorkerSession | undefined {
     const entry = this.sessions.get(sessionId);
@@ -184,4 +226,57 @@ export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
       webSearchMode: 'disabled',
     };
   }
+}
+
+function mapThreadEvent(event: ThreadEvent): RuntimeStreamEvent | undefined {
+  switch (event.type) {
+    case 'thread.started':
+      return event.thread_id ? { type: 'thread.started', threadId: event.thread_id } : undefined;
+    case 'turn.started':
+      return { type: 'turn.started' };
+    case 'item.started':
+    case 'item.updated':
+      return itemEvent(event.type, event.item.type, event.item.id);
+    case 'item.completed':
+      return itemEvent(
+        'item.completed',
+        event.item.type,
+        event.item.id,
+        event.item.type === 'agent_message' ? event.item.text : undefined,
+      );
+    case 'turn.completed':
+      return { type: 'turn.completed', usage: normalizeUsage(event.usage) };
+    case 'turn.failed':
+      return { type: 'turn.failed', message: event.error.message };
+    case 'error':
+      return { type: 'error', message: event.message };
+    default:
+      return undefined;
+  }
+}
+
+function itemEvent(
+  type: 'item.started' | 'item.updated' | 'item.completed',
+  itemType: string,
+  itemId: string,
+  text?: string,
+): RuntimeStreamEvent {
+  const base = {
+    type,
+    itemType,
+    ...(itemId ? { itemId } : {}),
+    ...(text !== undefined ? { text } : {}),
+  };
+  return base as RuntimeStreamEvent;
+}
+
+function normalizeUsage(usage: Usage | null | undefined): TaskUsage | null {
+  if (!usage) return null;
+  return {
+    input_tokens: usage.input_tokens ?? 0,
+    cached_input_tokens: usage.cached_input_tokens ?? 0,
+    cache_write_input_tokens: usage.cache_write_input_tokens ?? 0,
+    output_tokens: usage.output_tokens ?? 0,
+    reasoning_output_tokens: usage.reasoning_output_tokens ?? 0,
+  };
 }

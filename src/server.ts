@@ -6,7 +6,7 @@ import type { SessionRegistry } from './storage/sessionRegistry.js';
 import { WorkerManager, WorkerToolError } from './workers/workerManager.js';
 
 export const BRIDGE_NAME = 'agent-session-bridge';
-export const BRIDGE_VERSION = '0.2.0';
+export const BRIDGE_VERSION = '0.3.0';
 export const BRIDGE_RUNTIME = 'codex';
 
 export interface BridgeDeps {
@@ -127,10 +127,79 @@ function toolError(error: unknown): ToolReply {
   throw error;
 }
 
+const taskStatusSchema = z.enum(['accepted', 'running', 'completed', 'failed', 'unknown']);
+
+const associationSchema = z.enum(['confirmed', 'unconfirmed', 'unavailable']);
+
+const progressEntrySchema = z.object({
+  at: z.string(),
+  kind: z.string(),
+  summary: z.string(),
+});
+
+const usageOutputSchema = z.object({
+  input_tokens: z.number(),
+  cached_input_tokens: z.number(),
+  cache_write_input_tokens: z.number(),
+  output_tokens: z.number(),
+  reasoning_output_tokens: z.number(),
+});
+
+const taskErrorSchema = z.object({
+  category: z.string(),
+  message: z.string(),
+});
+
+const dispatchInputSchema = z.object({
+  workerId: z.string().min(1),
+  message: z.string().min(1),
+  requestKey: z.string().min(1).max(256),
+});
+
+const dispatchOutputSchema = z.object({
+  taskId: z.string(),
+  workerId: z.string(),
+  status: taskStatusSchema,
+  replayed: z.boolean(),
+});
+
+const taskIdInputSchema = z.object({
+  taskId: z.string().min(1),
+});
+
+const taskStatusOutputSchema = z.object({
+  taskId: z.string(),
+  workerId: z.string(),
+  status: taskStatusSchema,
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  startedAt: z.string().nullable(),
+  completedAt: z.string().nullable(),
+  nativeThreadId: z.string().nullable(),
+  progress: z.array(progressEntrySchema),
+  errorCategory: z.string().nullable(),
+  errorMessage: z.string().nullable(),
+  association: associationSchema,
+  associationDetail: z.string().nullable(),
+});
+
+const taskResultOutputSchema = z.object({
+  taskId: z.string(),
+  workerId: z.string(),
+  status: z.enum(['completed', 'failed', 'unknown', 'NOT_READY']),
+  nativeThreadId: z.string().nullable(),
+  response: z.string().nullable(),
+  usage: usageOutputSchema.nullable(),
+  completedAt: z.string().nullable(),
+  error: taskErrorSchema.nullable(),
+  message: z.string().nullable(),
+  association: associationSchema,
+  associationDetail: z.string().nullable(),
+});
+
 /**
- * Creates the MCP server. Exposes `bridge_status` plus the worker tools
- * introduced in INIT-02: `create_worker`, `list_workers`, `get_worker`,
- * `send_worker_message`.
+ * Creates the MCP server. Keeps the INIT-02 tools and adds asynchronous
+ * task dispatch: `dispatch_worker_task`, `get_task_status`, `get_task_result`.
  */
 export function createServer(deps: BridgeDeps): McpServer {
   const server = new McpServer({ name: BRIDGE_NAME, version: BRIDGE_VERSION });
@@ -154,7 +223,7 @@ export function createServer(deps: BridgeDeps): McpServer {
       description:
         'Registers a new persistent Codex worker bound to a git workspace. ' +
         'The worker starts in pending_initialization — no native Codex thread ' +
-        'exists until the first send_worker_message turn completes.',
+        'exists until the first send_worker_message or dispatch_worker_task turn starts.',
       inputSchema: createWorkerInputSchema,
       outputSchema: z.object({ worker: workerViewSchema }),
     },
@@ -218,6 +287,71 @@ export function createServer(deps: BridgeDeps): McpServer {
           args.message,
         );
         return ok(result);
+      } catch (error) {
+        return toolError(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'dispatch_worker_task',
+    {
+      title: 'Dispatch Worker Task',
+      description:
+        'Accepts one worker message and returns a taskId immediately. ' +
+        'status "accepted" means the task was recorded in this MCP server process, ' +
+        'not that the worker finished. Poll get_task_status and read get_task_result. ' +
+        'The same requestKey and message replay the original task; a different message ' +
+        'or worker for that key is a conflict. A busy worker is rejected and not queued. ' +
+        'The turn stops if this server process exits.',
+      inputSchema: dispatchInputSchema,
+      outputSchema: dispatchOutputSchema,
+    },
+    async (args) => {
+      try {
+        const result = await deps.manager.dispatchTask(args.workerId, args.message, args.requestKey);
+        return ok(result);
+      } catch (error) {
+        return toolError(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'get_task_status',
+    {
+      title: 'Get Task Status',
+      description:
+        'Returns the durable status of one asynchronous worker task: state, timestamps, ' +
+        'a bounded progress summary, any known native thread id, and the error category. ' +
+        'Does not include the final assistant message.',
+      inputSchema: taskIdInputSchema,
+      outputSchema: taskStatusOutputSchema,
+    },
+    async (args) => {
+      try {
+        return ok(deps.manager.getTaskStatus(args.taskId));
+      } catch (error) {
+        return toolError(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'get_task_result',
+    {
+      title: 'Get Task Result',
+      description:
+        'Returns the final assistant message and token usage when the task completed. ' +
+        'status NOT_READY means the turn is still accepted or running. ' +
+        'failed and unknown do not include an invented response. ' +
+        'unknown tasks are not re-executed.',
+      inputSchema: taskIdInputSchema,
+      outputSchema: taskResultOutputSchema,
+    },
+    async (args) => {
+      try {
+        return ok(deps.manager.getTaskResult(args.taskId));
       } catch (error) {
         return toolError(error);
       }

@@ -153,4 +153,94 @@ describe('CodexRuntimeAdapter', () => {
     await adapter.createSession({ cwd: 'E:\\ws' });
     expect(sdk.startCalls[0]?.model).toBe('default_model');
   });
+
+  it('maps runStreamed events without copying command output or inventing a turn id', async () => {
+    const sdk = new FakeCodexSdk();
+    const adapter = await connectedAdapter(sdk);
+    const session = await adapter.createSession({ cwd: 'E:\\ws' });
+    const thread = sdk.threads[0] as FakeThread;
+    thread.streamEvents = [
+      { type: 'thread.started', thread_id: 'thread_stream' },
+      { type: 'turn.started' },
+      {
+        type: 'item.completed',
+        item: {
+          id: 'cmd_1',
+          type: 'command_execution',
+          command: 'echo sk-supersecretvalue',
+          aggregated_output: 'sk-supersecretvalue',
+          status: 'completed',
+        },
+      },
+      {
+        type: 'item.completed',
+        item: { id: 'msg_1', type: 'agent_message', text: 'streamed reply' },
+      },
+      {
+        type: 'turn.completed',
+        usage: {
+          input_tokens: 4,
+          cached_input_tokens: 0,
+          cache_write_input_tokens: 1,
+          output_tokens: 2,
+          reasoning_output_tokens: 0,
+        },
+      },
+    ];
+
+    const events = [];
+    for await (const event of adapter.runTaskStreamed(session.id, task('task_stream'))) {
+      events.push(event);
+    }
+
+    expect(events).toEqual([
+      { type: 'thread.started', threadId: 'thread_stream' },
+      { type: 'turn.started' },
+      { type: 'item.completed', itemType: 'command_execution', itemId: 'cmd_1' },
+      { type: 'item.completed', itemType: 'agent_message', itemId: 'msg_1', text: 'streamed reply' },
+      {
+        type: 'turn.completed',
+        usage: {
+          input_tokens: 4,
+          cached_input_tokens: 0,
+          cache_write_input_tokens: 1,
+          output_tokens: 2,
+          reasoning_output_tokens: 0,
+        },
+      },
+    ]);
+    expect(JSON.stringify(events)).not.toContain('sk-supersecretvalue');
+    expect(JSON.stringify(events)).not.toContain('turnId');
+    expect(adapter.getSession(session.id)?.externalSessionId).toBe('thread_stream');
+    expect(sdk.startCalls[0]).toMatchObject({
+      sandboxMode: 'read-only',
+      approvalPolicy: 'never',
+      webSearchMode: 'disabled',
+    });
+    expect(sdk.startCalls[0]).not.toHaveProperty('skipGitRepoCheck');
+  });
+
+  it('releases the session lock when a streamed consumer stops early', async () => {
+    const sdk = new FakeCodexSdk();
+    const adapter = await connectedAdapter(sdk);
+    const session = await adapter.createSession({ cwd: 'E:\\ws' });
+    const thread = sdk.threads[0] as FakeThread;
+    thread.streamEvents = [
+      { type: 'turn.started' },
+      { type: 'turn.completed', usage: {
+        input_tokens: 1,
+        cached_input_tokens: 0,
+        cache_write_input_tokens: 0,
+        output_tokens: 1,
+        reasoning_output_tokens: 0,
+      } },
+    ];
+
+    const iterator = adapter.runTaskStreamed(session.id, task('task_partial'))[Symbol.asyncIterator]();
+    await iterator.next();
+    await iterator.return?.(undefined);
+
+    const result = await adapter.runTask(session.id, task('task_after'));
+    expect(result.status).toBe('succeeded');
+  });
 });

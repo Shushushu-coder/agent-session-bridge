@@ -1,12 +1,14 @@
 import type {
   AgentRuntimeAdapter,
   CreateSessionInput,
+  RuntimeStreamEvent,
 } from '../../src/contracts/runtime.js';
 import type { WorkerSession } from '../../src/contracts/session.js';
-import type { AgentTask, TaskResult } from '../../src/contracts/task.js';
+import type { AgentTask, TaskResult, TaskUsage } from '../../src/contracts/task.js';
 import type {
   CodexSdkLike,
   CodexThreadLike,
+  ThreadEvent,
   ThreadOptions,
 } from '../../src/runtime/codex/codexSdk.js';
 
@@ -33,6 +35,13 @@ export class FakeCodexSdk implements CodexSdkLike {
 
 export class FakeThread implements CodexThreadLike {
   runCalls: string[] = [];
+  streamCalls: string[] = [];
+  /** Events yielded by runStreamed. Empty unless a test sets them. */
+  streamEvents: ThreadEvent[] = [];
+  /** When set, runStreamed waits before yielding. */
+  streamHold: Promise<void> | null = null;
+  /** When set, runStreamed throws after streamHold. */
+  streamError: Error | null = null;
 
   /** Set before run() resolves to simulate thread.started mid-turn. */
   idOnRun: string | null = null;
@@ -60,10 +69,34 @@ export class FakeThread implements CodexThreadLike {
       usage: null,
     };
   }
+
+  async runStreamed(input: string) {
+    this.streamCalls.push(input);
+    const events = this.streamEvents;
+    const hold = this.streamHold;
+    const error = this.streamError;
+    const self = this;
+    return {
+      events: (async function* () {
+        if (hold) await hold;
+        if (self.idOnRun) self._id = self.idOnRun;
+        if (error) throw error;
+        for (const event of events) yield event;
+      })(),
+    };
+  }
 }
 
+export const FAKE_STREAM_USAGE: TaskUsage = {
+  input_tokens: 3,
+  cached_input_tokens: 1,
+  cache_write_input_tokens: 0,
+  output_tokens: 2,
+  reasoning_output_tokens: 0,
+};
+
 export interface FakeAdapterCall {
-  method: 'createSession' | 'resumeSession' | 'runTask';
+  method: 'createSession' | 'resumeSession' | 'runTask' | 'runTaskStreamed';
   input?: CreateSessionInput;
   externalSessionId?: string;
   sessionId?: string;
@@ -82,6 +115,12 @@ export class FakeRuntimeAdapter implements AgentRuntimeAdapter {
   runTaskImpl:
     | ((sessionId: string, task: AgentTask) => Promise<TaskResult>)
     | null = null;
+  /** When set, runTaskStreamed waits before yielding events. */
+  streamHold: Promise<void> | null = null;
+  /** Extra delay after the hold, so status can be observed mid-turn. */
+  streamDelayMs = 0;
+  streamImpl: ((sessionId: string, task: AgentTask) => AsyncIterable<RuntimeStreamEvent>) | null =
+    null;
   private sessions = new Map<string, WorkerSession>();
   private counter = 0;
 
@@ -124,6 +163,30 @@ export class FakeRuntimeAdapter implements AgentRuntimeAdapter {
       output: 'FAKE_OUTPUT',
       completedAt: new Date().toISOString(),
     });
+  }
+
+  async *runTaskStreamed(sessionId: string, task: AgentTask): AsyncIterable<RuntimeStreamEvent> {
+    this.calls.push({ method: 'runTaskStreamed', sessionId, prompt: task.prompt });
+    if (this.streamHold) await this.streamHold;
+    if (this.streamDelayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, this.streamDelayMs));
+    }
+    if (this.streamImpl) {
+      yield* this.streamImpl(sessionId, task);
+      return;
+    }
+    const session = this.sessions.get(sessionId);
+    if (session) session.externalSessionId = 'thread_fake_async';
+    yield { type: 'thread.started', threadId: 'thread_fake_async' };
+    yield { type: 'turn.started' };
+    yield { type: 'item.started', itemType: 'agent_message', itemId: 'msg_1' };
+    yield {
+      type: 'item.completed',
+      itemType: 'agent_message',
+      itemId: 'msg_1',
+      text: `FAKE_ASYNC:${task.prompt}`,
+    };
+    yield { type: 'turn.completed', usage: { ...FAKE_STREAM_USAGE } };
   }
 
   getSession(sessionId: string): WorkerSession | undefined {

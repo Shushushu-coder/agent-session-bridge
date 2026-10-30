@@ -23,12 +23,15 @@ afterEach(async () => {
 });
 
 describe('worker MCP tools', () => {
-  it('advertises exactly the five implemented tools', async () => {
+  it('advertises the sync worker tools and the async task tools', async () => {
     const { client } = await stack();
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
       'bridge_status',
       'create_worker',
+      'dispatch_worker_task',
+      'get_task_result',
+      'get_task_status',
       'get_worker',
       'list_workers',
       'send_worker_message',

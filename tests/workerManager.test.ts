@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { WorkspaceCheck } from '../src/workers/workspaceVerifier.js';
 import { WorkerManager, WorkerToolError } from '../src/workers/workerManager.js';
 import { SessionRegistry } from '../src/storage/sessionRegistry.js';
+import { TaskStore } from '../src/storage/taskStore.js';
 import type { TaskResult } from '../src/contracts/task.js';
 import { FakeRuntimeAdapter } from './helpers/fakes.js';
 
@@ -13,14 +14,20 @@ let registryFile: string;
 let adapter: FakeRuntimeAdapter;
 let registry: SessionRegistry;
 let manager: WorkerManager;
+let taskStore: TaskStore;
 
 const okWorkspace = async (p: string): Promise<WorkspaceCheck> => ({
   ok: true,
   resolvedPath: p,
 });
 
-function makeManager(r: SessionRegistry, a: FakeRuntimeAdapter) {
-  return new WorkerManager({ registry: r, adapter: a, verifyWorkspace: okWorkspace });
+function makeManager(r: SessionRegistry, a: FakeRuntimeAdapter, store: TaskStore = taskStore) {
+  return new WorkerManager({
+    registry: r,
+    taskStore: store,
+    adapter: a,
+    verifyWorkspace: okWorkspace,
+  });
 }
 
 function failedResult(externalSessionId?: string): TaskResult {
@@ -38,6 +45,7 @@ beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'asb-manager-'));
   registryFile = join(dir, 'workers.json');
   registry = await SessionRegistry.open(registryFile);
+  taskStore = await TaskStore.open(join(dir, 'tasks.json'));
   adapter = new FakeRuntimeAdapter();
   manager = makeManager(registry, adapter);
 });
@@ -61,6 +69,7 @@ describe('WorkerManager', () => {
   it('rejects an invalid workspace before registering', async () => {
     const m = new WorkerManager({
       registry,
+      taskStore,
       adapter,
       verifyWorkspace: async () => ({ ok: false, error: 'not a git work tree' }),
     });
@@ -236,6 +245,7 @@ describe('WorkerManager', () => {
     const calls: string[] = [];
     const m = new WorkerManager({
       registry,
+      taskStore,
       adapter,
       verifyWorkspace: async (p) => {
         calls.push(p);

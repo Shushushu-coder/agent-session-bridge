@@ -1,9 +1,11 @@
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { installProcessShutdown } from './processLifetime.js';
 import { CodexRuntimeAdapter } from './runtime/codex/codexRuntimeAdapter.js';
 import { createServer } from './server.js';
 import { SessionRegistry } from './storage/sessionRegistry.js';
+import { TaskStore } from './storage/taskStore.js';
 import { WorkerManager } from './workers/workerManager.js';
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
@@ -12,12 +14,24 @@ const moduleDir = dirname(fileURLToPath(import.meta.url));
 const dataDir =
   process.env.AGENT_SESSION_BRIDGE_DATA_DIR ?? resolve(moduleDir, '..', 'sessions');
 const registryPath = join(dataDir, 'workers.json');
+const taskStorePath = join(dataDir, 'tasks.json');
 
 let registry: SessionRegistry;
 try {
   registry = await SessionRegistry.open(registryPath);
 } catch (error) {
   // Corrupted registry is fatal — never silently drop managed workers.
+  console.error(
+    `[agent-session-bridge] cannot start: ${error instanceof Error ? error.message : String(error)}`,
+  );
+  process.exit(2);
+}
+
+let taskStore: TaskStore;
+try {
+  taskStore = await TaskStore.open(taskStorePath);
+} catch (error) {
+  // Corrupted task history is fatal — never silently drop completed results.
   console.error(
     `[agent-session-bridge] cannot start: ${error instanceof Error ? error.message : String(error)}`,
   );
@@ -40,7 +54,7 @@ try {
   );
 }
 
-const manager = new WorkerManager({ registry, adapter });
+const manager = new WorkerManager({ registry, taskStore, adapter });
 
 const handle = serveStdio(() => createServer({ manager, adapter, registry }), {
   onerror(error) {
@@ -49,11 +63,12 @@ const handle = serveStdio(() => createServer({ manager, adapter, registry }), {
 });
 
 console.error(
-  `[agent-session-bridge] MCP server listening on stdio (registry: ${registryPath}, runtime ${adapter.isConnected() ? 'connected' : 'unavailable'})`,
+  `[agent-session-bridge] MCP server listening on stdio (registry: ${registryPath}, tasks: ${taskStorePath}, runtime ${adapter.isConnected() ? 'connected' : 'unavailable'})`,
 );
 
-for (const signal of ['SIGINT', 'SIGTERM'] as const) {
-  process.on(signal, () => {
-    void handle.close().finally(() => process.exit(0));
-  });
-}
+// In-flight async tasks are marked unknown and are not resumed. A closed
+// stdin ends this process; it does not detach a background daemon.
+installProcessShutdown({
+  handle,
+  abandon: (reason) => manager.abandonInFlight(reason),
+});

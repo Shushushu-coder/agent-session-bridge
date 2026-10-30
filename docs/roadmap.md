@@ -20,13 +20,18 @@
 - Offline E2E via compiled fake `codex` binary across real process
   restarts.
 
-## INIT-03 — Richer worker operations
+## INIT-03 — Asynchronous task dispatch (done)
 
-- Task/turn metadata surfacing (usage, items), optional streaming
-  progress via `runStreamed`.
-- Worker removal/rename tools; recovery path for
-  `initialization_uncertain` workers.
-- AbortSignal plumbing for client-initiated cancellation.
+- `dispatch_worker_task`, `get_task_status`, `get_task_result`.
+- In-process `runStreamed()` consumption. `taskId` is the bridge's
+  execution id; the SDK events used here have no native turn id.
+- JSON task store, separate from the worker registry, with restart
+  recovery to `unknown` and unconfirmed thread-association checks.
+- Shared per-worker busy lock with `send_worker_message`. No daemon,
+  queue, or automatic retry.
+
+Not in this slice: worker removal/rename, a recovery tool for
+`initialization_uncertain`, client abort, and MCP Experimental Tasks.
 
 ## INIT-04 — Parallel workers & queues
 

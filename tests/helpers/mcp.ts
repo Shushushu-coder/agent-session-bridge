@@ -4,6 +4,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SessionRegistry } from '../../src/storage/sessionRegistry.js';
+import { TaskStore } from '../../src/storage/taskStore.js';
 import { WorkerManager } from '../../src/workers/workerManager.js';
 import type { WorkspaceVerifier } from '../../src/workers/workspaceVerifier.js';
 import { createServer, type BridgeDeps } from '../../src/server.js';
@@ -24,7 +25,8 @@ export async function createTestStack(
 ): Promise<TestStack> {
   const dataDir = await mkdtemp(join(tmpdir(), 'asb-mcp-'));
   const registry = await SessionRegistry.open(join(dataDir, 'workers.json'));
-  const manager = new WorkerManager({ registry, adapter, verifyWorkspace });
+  const taskStore = await TaskStore.open(join(dataDir, 'tasks.json'));
+  const manager = new WorkerManager({ registry, taskStore, adapter, verifyWorkspace });
   const deps: BridgeDeps = { manager, adapter, registry };
   const server = createServer(deps);
   const client = new Client({ name: 'test-client', version: '0.0.1' });
