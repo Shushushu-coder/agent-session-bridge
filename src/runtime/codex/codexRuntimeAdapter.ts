@@ -1,0 +1,187 @@
+import { randomUUID } from 'node:crypto';
+import type {
+  AgentRuntimeAdapter,
+  CreateSessionInput,
+} from '../../contracts/runtime.js';
+import type { WorkerSession } from '../../contracts/session.js';
+import type { AgentTask, TaskResult } from '../../contracts/task.js';
+import {
+  createCodexSdk,
+  type CodexOptions,
+  type CodexSdkLike,
+  type CodexThreadLike,
+  type ThreadOptions,
+} from './codexSdk.js';
+
+export class CodexAdapterError extends Error {
+  constructor(
+    readonly code: 'NOT_CONNECTED' | 'SESSION_NOT_FOUND' | 'SESSION_BUSY',
+    message: string,
+  ) {
+    super(message);
+    this.name = 'CodexAdapterError';
+  }
+}
+
+export interface CodexRuntimeAdapterOptions {
+  /** Prebuilt SDK-like client (tests inject fakes). */
+  sdk?: CodexSdkLike;
+  /** Options for the real `Codex` constructor when `sdk` is not provided. */
+  codexOptions?: CodexOptions;
+  /** Default model for threads that don't specify one. */
+  model?: string;
+}
+
+interface SessionEntry {
+  session: WorkerSession;
+  thread: CodexThreadLike;
+  running: boolean;
+}
+
+/**
+ * `AgentRuntimeAdapter` over `@openai/codex-sdk`.
+ *
+ * Each bridge session wraps one SDK `Thread`. Every `run()` spawns a fresh
+ * `codex exec` CLI subprocess — a persisted thread id is a resumable
+ * checkpoint, not a long-lived process.
+ *
+ * Safety defaults are fixed here, not configurable by callers:
+ * `sandboxMode: 'read-only'`, `approvalPolicy: 'never'`,
+ * `webSearchMode: 'disabled'`, git-repo check enforced, no extra writable
+ * directories. Workers can never escalate their own permissions.
+ */
+export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
+  readonly kind = 'codex' as const;
+
+  private sdk: CodexSdkLike | undefined;
+  private readonly sessions = new Map<string, SessionEntry>();
+
+  constructor(private readonly options: CodexRuntimeAdapterOptions = {}) {}
+
+  isConnected(): boolean {
+    return this.sdk !== undefined;
+  }
+
+  /**
+   * Resolves the Codex CLI binary (vendored with `@openai/codex`, or
+   * `codexOptions.codexPathOverride`). Throws if no binary can be located —
+   * callers should treat that as "runtime unavailable".
+   */
+  async connect(): Promise<void> {
+    if (!this.sdk) {
+      this.sdk = this.options.sdk ?? createCodexSdk(this.options.codexOptions);
+    }
+  }
+
+  async createSession(input: CreateSessionInput = {}): Promise<WorkerSession> {
+    const thread = this.requireSdk().startThread(this.threadOptions(input));
+    return this.register(thread);
+  }
+
+  async resumeSession(
+    externalSessionId: string,
+    input: CreateSessionInput = {},
+  ): Promise<WorkerSession> {
+    const thread = this.requireSdk().resumeThread(
+      externalSessionId,
+      this.threadOptions(input),
+    );
+    return this.register(thread, externalSessionId);
+  }
+
+  async runTask(sessionId: string, task: AgentTask): Promise<TaskResult> {
+    const entry = this.sessions.get(sessionId);
+    if (!entry) {
+      throw new CodexAdapterError('SESSION_NOT_FOUND', `Unknown session ${sessionId}`);
+    }
+    if (entry.running) {
+      throw new CodexAdapterError('SESSION_BUSY', `Session ${sessionId} is already running`);
+    }
+
+    entry.running = true;
+    entry.session.status = 'busy';
+    const completedAt = () => new Date().toISOString();
+    try {
+      const turn = await entry.thread.run(task.prompt);
+      entry.session.status = 'ready';
+      if (entry.thread.id) entry.session.externalSessionId = entry.thread.id;
+      entry.session.lastActivityAt = completedAt();
+      return {
+        taskId: task.id,
+        sessionId,
+        status: 'succeeded',
+        output: turn.finalResponse,
+        ...(this.nativeIdOf(entry) ? { externalSessionId: this.nativeIdOf(entry)! } : {}),
+        completedAt: completedAt(),
+      };
+    } catch (error) {
+      entry.session.status = 'failed';
+      entry.session.lastActivityAt = completedAt();
+      return {
+        taskId: task.id,
+        sessionId,
+        status: 'failed',
+        error: error instanceof Error ? error.message : String(error),
+        ...(this.nativeIdOf(entry) ? { externalSessionId: this.nativeIdOf(entry)! } : {}),
+        completedAt: completedAt(),
+      };
+    } finally {
+      entry.running = false;
+    }
+  }
+
+  /** Current snapshot of a live session (undefined if unknown). */
+  getSession(sessionId: string): WorkerSession | undefined {
+    const entry = this.sessions.get(sessionId);
+    return entry ? { ...entry.session } : undefined;
+  }
+
+  async dispose(): Promise<void> {
+    for (const entry of this.sessions.values()) {
+      if (entry.session.status !== 'failed') entry.session.status = 'stopped';
+    }
+    this.sessions.clear();
+  }
+
+  private register(thread: CodexThreadLike, externalSessionId?: string): WorkerSession {
+    const session: WorkerSession = {
+      id: `csess_${randomUUID()}`,
+      runtime: this.kind,
+      status: externalSessionId ? 'ready' : 'created',
+      createdAt: new Date().toISOString(),
+      ...(externalSessionId ? { externalSessionId } : {}),
+    };
+    this.sessions.set(session.id, { session, thread, running: false });
+    return { ...session };
+  }
+
+  private nativeIdOf(entry: SessionEntry): string | undefined {
+    return entry.thread.id ?? entry.session.externalSessionId;
+  }
+
+  private requireSdk(): CodexSdkLike {
+    if (!this.sdk) {
+      throw new CodexAdapterError(
+        'NOT_CONNECTED',
+        'Codex runtime is not connected (adapter.connect() not called or failed)',
+      );
+    }
+    return this.sdk;
+  }
+
+  /**
+   * Fixed safe defaults; only `workingDirectory` and `model` vary per
+   * session. `skipGitRepoCheck`, `additionalDirectories` and
+   * `networkAccessEnabled` are deliberately never set.
+   */
+  private threadOptions(input: CreateSessionInput): ThreadOptions {
+    const model = input.model ?? this.options.model;
+    return {
+      ...(input.cwd ? { workingDirectory: input.cwd } : {}),
+      ...(model ? { model } : {}),
+      sandboxMode: 'read-only',
+      approvalPolicy: 'never',
+      webSearchMode: 'disabled',
+    };
+  }
+}

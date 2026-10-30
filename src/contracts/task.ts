@@ -23,5 +23,11 @@ export interface TaskResult {
   status: AgentTaskStatus;
   output?: string;
   error?: string;
+  /**
+   * Runtime-native session id observed during this turn (e.g. a Codex
+   * thread id first assigned when `thread.started` arrives). Reported even
+   * on failure: a turn can fail after the runtime created its session.
+   */
+  externalSessionId?: string;
   readonly completedAt: string;
 }

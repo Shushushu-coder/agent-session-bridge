@@ -1,7 +1,7 @@
 {
   "name": "agent-session-bridge",
-  "version": "0.1.0",
-  "description": "Lightweight local MCP server that will bridge Codex main sessions to runtime workers.",
+  "version": "0.2.0",
+  "description": "Lightweight local MCP server bridging Codex main sessions to persistent Codex worker sessions.",
   "private": true,
   "type": "module",
   "engines": {
@@ -24,6 +24,7 @@
   "license": "UNLICENSED",
   "dependencies": {
     "@modelcontextprotocol/server": "^2.4.0",
+    "@openai/codex-sdk": "^0.164.0",
     "zod": "^4.6.7"
   },
   "devDependencies": {

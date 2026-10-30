@@ -1,10 +1,27 @@
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { existsSync } from 'node:fs';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 const SERVER_ENTRY = fileURLToPath(new URL('../dist/index.js', import.meta.url));
+
+const tempDirs: string[] = [];
+
+async function tempDataDir(): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), 'asb-smoke-'));
+  tempDirs.push(dir);
+  return dir;
+}
+
+afterEach(async () => {
+  await Promise.all(
+    tempDirs.splice(0).map((d) => rm(d, { recursive: true, force: true })),
+  );
+});
 
 function processAlive(pid: number): boolean {
   try {
@@ -24,6 +41,22 @@ async function waitForExit(pid: number, timeoutMs = 5000): Promise<boolean> {
   return !processAlive(pid);
 }
 
+async function spawnServer(dataDir: string, extraEnv: Record<string, string> = {}) {
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [SERVER_ENTRY],
+    stderr: 'pipe',
+    env: {
+      ...process.env,
+      AGENT_SESSION_BRIDGE_DATA_DIR: dataDir,
+      ...extraEnv,
+    } as Record<string, string>,
+  });
+  const client = new Client({ name: 'mcp-smoke-client', version: '0.0.1' });
+  await client.connect(transport);
+  return { client, transport, pid: transport.pid! };
+}
+
 describe('MCP stdio smoke test', () => {
   it(
     'spawns the built server, completes init/listTools/callTool, and leaves no child process',
@@ -31,59 +64,108 @@ describe('MCP stdio smoke test', () => {
     async () => {
       expect(existsSync(SERVER_ENTRY)).toBe(true);
 
-      const transport = new StdioClientTransport({
-        command: process.execPath,
-        args: [SERVER_ENTRY],
-        stderr: 'pipe',
-      });
-
+      const dataDir = await tempDataDir();
+      const { client, transport, pid } = await spawnServer(dataDir);
       const stderrChunks: Buffer[] = [];
       transport.stderr?.on('data', (chunk: Buffer) => stderrChunks.push(chunk));
 
-      const client = new Client({ name: 'mcp-smoke-client', version: '0.0.1' });
-      await client.connect(transport);
-      const pid = transport.pid;
-      expect(pid).toBeTypeOf('number');
-
       try {
-        // initialize handshake already done by connect(); verify negotiated identity.
         expect(client.getServerVersion()).toEqual({
           name: 'agent-session-bridge',
-          version: '0.1.0',
+          version: '0.2.0',
         });
         await client.ping();
 
-        // Tool discovery: only the implemented tool is advertised.
         const { tools } = await client.listTools();
-        expect(tools.map((t) => t.name)).toEqual(['bridge_status']);
+        expect(tools.map((t) => t.name).sort()).toEqual([
+          'bridge_status',
+          'create_worker',
+          'get_worker',
+          'list_workers',
+          'send_worker_message',
+        ]);
 
-        // Tool call: structured content carries the honest skeleton status.
         const result = await client.callTool({ name: 'bridge_status', arguments: {} });
         expect(result.isError).toBeFalsy();
         expect(result.structuredContent).toMatchObject({
           name: 'agent-session-bridge',
-          status: 'skeleton_ready',
           runtime: 'codex',
-          runtimeConnected: false,
-          sessionOrchestrationAvailable: false,
+          sessionOrchestrationAvailable: true,
+          managedWorkers: 0,
         });
-
-        // No session-orchestration tools are prematurely exposed.
-        const names = tools.map((t) => t.name);
-        for (const forbidden of ['session_create', 'session_resume', 'task_dispatch', 'task_run']) {
-          expect(names).not.toContain(forbidden);
-        }
       } finally {
         await client.close();
       }
 
-      // Child process must be fully gone after close.
-      expect(await waitForExit(pid!)).toBe(true);
-
-      // Diagnostics go to stderr, never to the stdio protocol channel —
-      // reaching this assertion at all proves stdout stayed clean JSON-RPC.
+      expect(await waitForExit(pid)).toBe(true);
       const stderrText = Buffer.concat(stderrChunks).toString('utf8');
       expect(stderrText).not.toContain('"jsonrpc"');
+    },
+  );
+
+  it(
+    'restores worker identity and thread mapping from the registry across a process restart',
+    { timeout: 30000 },
+    async () => {
+      const dataDir = await tempDataDir();
+      const now = new Date().toISOString();
+      // A worker that finished initialization in a previous server lifetime.
+      await writeFile(
+        join(dataDir, 'workers.json'),
+        JSON.stringify({
+          schemaVersion: 1,
+          workers: [
+            {
+              workerId: 'wrk_restart1',
+              name: 'restored',
+              runtime: 'codex',
+              threadId: 'thread_from_past_life',
+              workspacePath: 'E:\\Projects\\agent-session-bridge',
+              state: 'ready',
+              createdAt: now,
+              updatedAt: now,
+            },
+          ],
+        }),
+        'utf8',
+      );
+
+      const first = await spawnServer(dataDir);
+      try {
+        const listed = await first.client.callTool({ name: 'list_workers', arguments: {} });
+        expect(listed.structuredContent).toMatchObject({
+          workers: [
+            {
+              workerId: 'wrk_restart1',
+              threadId: 'thread_from_past_life',
+              state: 'ready',
+            },
+          ],
+        });
+      } finally {
+        await first.client.close();
+        await waitForExit(first.pid);
+      }
+
+      // Second process instance: same file, same mapping, no re-registration.
+      const second = await spawnServer(dataDir);
+      try {
+        const got = await second.client.callTool({
+          name: 'get_worker',
+          arguments: { workerId: 'wrk_restart1' },
+        });
+        expect(got.isError).toBeFalsy();
+        expect(got.structuredContent).toMatchObject({
+          worker: {
+            workerId: 'wrk_restart1',
+            threadId: 'thread_from_past_life',
+            state: 'ready',
+          },
+        });
+      } finally {
+        await second.client.close();
+        await waitForExit(second.pid);
+      }
     },
   );
 });
