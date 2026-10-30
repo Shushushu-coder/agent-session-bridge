@@ -5,9 +5,10 @@ message, and resume **persistent Codex worker sessions** through standard
 MCP tools. Built on the MCP TypeScript SDK v2 over stdio and the official
 `@openai/codex-sdk`.
 
-**Status: INIT-03.** Persistent Codex workers from INIT-02 remain, and a main
-session can now dispatch one worker turn asynchronously, poll its status, and
-read the stored result after the MCP server process restarts.
+**Status: INIT-04.** Persistent Codex workers and asynchronous task dispatch
+remain; a main session can now also dispatch one task per worker in a single
+idempotent **batch** call, poll the batch's aggregate status, and read every
+member's stored result in one read — including after a server restart.
 
 ## Currently implemented
 
@@ -23,7 +24,8 @@ read the stored result after the MCP server process restarts.
   (`pending_initialization` → `initializing` → `ready` /
   `initialization_uncertain` / `error`)
 - JSON task store (`src/storage/taskStore.ts`) — one record per asynchronous
-  turn, separate from `workers.json`, with the same atomic-write rules
+  turn plus immutable batch records (`tasks.json`), separate from
+  `workers.json`, with the same atomic-write rules
 - Fixed worker sandboxing: `sandboxMode: "read-only"`,
   `approvalPolicy: "never"`, `webSearchMode: "disabled"`, git-repo check
   enforced, no extra writable dirs — workers cannot self-escalate
@@ -42,6 +44,9 @@ read the stored result after the MCP server process restarts.
 | `dispatch_worker_task` | Accept one turn and return `taskId` without waiting for the model |
 | `get_task_status`     | Poll task state, bounded progress, thread id, and error category |
 | `get_task_result`     | Read the final reply and token usage, or `NOT_READY` / failure   |
+| `dispatch_worker_batch` | Dispatch one task per worker at once; returns `batchId` + per-member outcome immediately |
+| `get_batch_status`    | Aggregate live status of every task in a batch                    |
+| `get_batch_results`   | Read every member's reply/usage/error in one call (truncated per member) |
 
 `send_worker_message` is synchronous. It returns
 `status: "completed" | "failed" | "busy"` only after the turn finishes, and
@@ -57,10 +62,49 @@ already in a turn is `WORKER_BUSY` and is not queued.
 `get_task_result` returns `NOT_READY` while the task is `accepted` or
 `running`. `failed` and `unknown` include an error and do not invent a reply.
 
+### Batches
+
+`dispatch_worker_batch` takes `requestKey` plus a `tasks` list of
+`{workerId, message}` pairs and fans out one task per worker — derived member
+requestKey `<requestKey>#<workerId>` — through the exact dispatch path of
+`dispatch_worker_task` (same busy lock, workspace check, replay rules, and
+fixed read-only sandbox). It returns `{batchId, tasks[], replayed}` as soon as
+every member was accepted or rejected; accepted members keep running in this
+process and genuinely run in parallel.
+
+The per-member `dispatchStatus` records the dispatch-time truth:
+`accepted` with a `taskId`, or `rejected` with a machine-readable
+`errorCategory` (`DUPLICATE_WORKER`, `BATCH_LIMIT_EXCEEDED`, `WORKER_BUSY`,
+`WORKER_NOT_FOUND`, `REQUEST_KEY_CONFLICT`, ...). A batch is **not** a
+transaction — accepted tasks keep running and remain queryable when siblings
+were rejected. One batch dispatches at most `maxBatchTasks` members (default
+3, `AGENT_SESSION_BRIDGE_MAX_BATCH_TASKS`); a repeated `workerId` is always
+rejected because a worker still runs at most one turn at a time.
+
+The batch record is immutable once written. Replaying the identical request
+returns the stored batch (`replayed: true`) without re-running anything; the
+same `requestKey` with a different task list is `REQUEST_KEY_CONFLICT`, as is
+a `requestKey` already claimed by a lone `dispatch_worker_task` (and vice
+versa).
+
+`get_batch_status` computes per-member current status, counts by state, and
+two honest flags: `allSettled` (nothing still `accepted`/`running`) and
+`allCompleted` (every dispatched task `completed` — mixed outcomes and
+unknowns do not count as success).
+
+`get_batch_results` returns each member's status, response, `nativeThreadId`,
+usage, and error — never merged across workers — plus deterministic
+`resultCounts` and summed `usageTotals`. Members still running report
+`NOT_READY`; `failed`/`unknown` members keep their real error and no invented
+response. Each member's response is capped (8 000 chars, `truncated: true`,
+`responseLength` gives the full size); read the full text via
+`get_task_result`.
+
 Errors that reject the call itself (`WORKER_NOT_FOUND`, `INVALID_WORKSPACE`,
 `STATE_BLOCKED`, `RUNTIME_UNAVAILABLE`, `WORKER_BUSY`, `REQUEST_KEY_CONFLICT`,
-`TASK_NOT_FOUND`) come back as MCP `isError` results with a machine-readable
-code.
+`TASK_NOT_FOUND`, `BATCH_NOT_FOUND`, `INVALID_INPUT`) come back as MCP
+`isError` results with a machine-readable code. Per-member failures inside a
+batch are reported in `tasks[]`, not as call errors.
 
 ### Task id and thread id
 
@@ -73,14 +117,21 @@ here do not include a native turn id, so the bridge does not invent one.
 
 `accepted` → `running` → `completed` or `failed`. If the server process exits
 before a terminal event, or the event stream ends without `turn.completed` /
-`turn.failed`, the task becomes `unknown` and is not started again.
+`turn.failed`, the task becomes `unknown` and is not started again. A batch
+member follows the same lifecycle; on the next start the batch record is
+still readable and its members show their recovered `unknown` state.
 
 ### Asking Codex Desktop
 
-1. `dispatch_worker_task` with `workerId`, `message`, and a new `requestKey`.
+1. `dispatch_worker_task` with `workerId`, `message`, and a new `requestKey`
+   — or `dispatch_worker_batch` with one `{workerId, message}` pair per
+   worker for parallel dispatch under one `batchId`.
 2. Call `get_task_status` with the returned `taskId` until the status is
-   terminal.
-3. Call `get_task_result` for the reply and token usage.
+   terminal — or `get_batch_status` for the whole batch at once.
+3. Call `get_task_result` for the reply and token usage — or
+   `get_batch_results` for every member's reply, usage, and error together.
+   The main session then does its own synthesis; the bridge never generates
+   an AI summary.
 
 Do this from the same MCP server process. Closing Codex Desktop, or killing
 the server, does not keep the turn running.
@@ -138,15 +189,17 @@ compiler is present.
 
 ## Environment variables
 
-| Variable                          | Purpose                                        |
-| --------------------------------- | ---------------------------------------------- |
-| `AGENT_SESSION_BRIDGE_DATA_DIR`   | Data directory for `workers.json` and `tasks.json` (default `<repo>/sessions`) |
-| `AGENT_SESSION_BRIDGE_CODEX_PATH` | Codex binary override (`codexPathOverride`)    |
-| `AGENT_SESSION_BRIDGE_MODEL`      | Default model for workers without one          |
+| Variable                            | Purpose                                        |
+| ----------------------------------- | ---------------------------------------------- |
+| `AGENT_SESSION_BRIDGE_DATA_DIR`     | Data directory for `workers.json` and `tasks.json` (default `<repo>/sessions`) |
+| `AGENT_SESSION_BRIDGE_CODEX_PATH`   | Codex binary override (`codexPathOverride`)    |
+| `AGENT_SESSION_BRIDGE_MODEL`        | Default model for workers without one          |
+| `AGENT_SESSION_BRIDGE_MAX_BATCH_TASKS` | Max tasks a batch may dispatch (default 3)  |
 
 `sessions/` is gitignored. `workers.json` stores worker metadata.
 `tasks.json` stores task status, a short progress summary, the final reply,
-and token usage. Neither file stores credentials or the raw SDK event stream.
+token usage, and the immutable batch→task mapping. Neither file stores
+credentials, member prompts, or the raw SDK event stream.
 A corrupt file refuses to start instead of being replaced with an empty
 store. On open, `accepted` and `running` tasks become `unknown`. If a task
 recorded a native thread id that `workers.json` does not have, status reports
@@ -170,7 +223,7 @@ args = ["E:\\Projects\\agent-session-bridge\\dist\\index.js"]
 src/index.ts             stdio entry (registry + task store → adapter → serve)
 src/processLifetime.ts   on shutdown, mark in-flight tasks unknown and exit
 src/server.ts            McpServer factory + tool registration
-src/contracts/           session / task / worker / runtime types
+src/contracts/           session / task / batch / worker / runtime types
 src/runtime/codex/       CodexRuntimeAdapter over @openai/codex-sdk
 src/storage/             SessionRegistry and TaskStore (atomic JSON files)
 src/workers/             WorkerManager + git workspace verifier

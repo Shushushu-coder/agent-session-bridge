@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { z } from 'zod';
+import type { BatchTaskInput, TaskBatch } from '../contracts/batch.js';
 import {
   MAX_TASK_PROGRESS,
   type TaskErrorInfo,
@@ -56,9 +57,27 @@ const taskSchema = z.object({
   error: errorSchema.nullable(),
 });
 
+const batchTaskEntrySchema = z.object({
+  workerId: z.string().min(1),
+  taskId: z.string().min(1).nullable(),
+  dispatchStatus: z.enum(['accepted', 'rejected']),
+  errorCategory: z.string().min(1).optional(),
+  errorMessage: z.string().optional(),
+});
+
+const batchSchema = z.object({
+  batchId: z.string().min(1),
+  requestKey: z.string().min(1),
+  requestFingerprint: z.string().min(1),
+  createdAt: z.string().min(1),
+  tasks: z.array(batchTaskEntrySchema),
+});
+
 const taskFileSchema = z.object({
   schemaVersion: z.literal(TASK_STORE_SCHEMA_VERSION),
   tasks: z.array(taskSchema),
+  // Optional so files written before batches existed still load.
+  batches: z.array(batchSchema).optional(),
 });
 
 export class TaskStoreCorruptedError extends Error {
@@ -82,6 +101,13 @@ export class DuplicateRequestKeyError extends Error {
   constructor(requestKey: string) {
     super(`requestKey ${requestKey} is already stored`);
     this.name = 'DuplicateRequestKeyError';
+  }
+}
+
+export class DuplicateBatchError extends Error {
+  constructor(batchId: string) {
+    super(`Batch ${batchId} already exists in the task store`);
+    this.name = 'DuplicateBatchError';
   }
 }
 
@@ -118,7 +144,10 @@ export type TaskPatch = Partial<
 export class TaskStore {
   private readonly byId = new Map<string, WorkerTask>();
   private readonly byKey = new Map<string, string>();
+  private readonly batchesById = new Map<string, TaskBatch>();
+  private readonly batchesByKey = new Map<string, string>();
   private order: string[] = [];
+  private batchOrder: string[] = [];
   private writeChain: Promise<void> = Promise.resolve();
 
   private constructor(readonly filePath: string) {}
@@ -162,6 +191,26 @@ export class TaskStore {
       store.byKey.set(task.requestKey, task.taskId);
       store.order.push(task.taskId);
     }
+    for (const record of result.data.batches ?? []) {
+      if (store.batchesById.has(record.batchId)) {
+        throw new TaskStoreCorruptedError(filePath, `duplicate batchId ${record.batchId}`);
+      }
+      if (store.batchesByKey.has(record.requestKey) || store.byKey.has(record.requestKey)) {
+        throw new TaskStoreCorruptedError(filePath, `duplicate requestKey ${record.requestKey}`);
+      }
+      for (const member of record.tasks) {
+        if (member.taskId !== null && !store.byId.has(member.taskId)) {
+          throw new TaskStoreCorruptedError(
+            filePath,
+            `batch ${record.batchId} references unknown task ${member.taskId}`,
+          );
+        }
+      }
+      const batch = cloneBatch(record);
+      store.batchesById.set(batch.batchId, batch);
+      store.batchesByKey.set(batch.requestKey, batch.batchId);
+      store.batchOrder.push(batch.batchId);
+    }
     if (recovered) await store.persist();
     return store;
   }
@@ -181,9 +230,31 @@ export class TaskStore {
     return this.get(taskId);
   }
 
+  getBatch(batchId: string): TaskBatch | undefined {
+    const record = this.batchesById.get(batchId);
+    return record ? cloneBatch(record) : undefined;
+  }
+
+  getBatchByRequestKey(requestKey: string): TaskBatch | undefined {
+    const batchId = this.batchesByKey.get(requestKey);
+    if (!batchId) return undefined;
+    return this.getBatch(batchId);
+  }
+
+  /** True when any task or batch already claims this requestKey. */
+  hasRequestKey(requestKey: string): boolean {
+    return this.byKey.has(requestKey) || this.batchesByKey.has(requestKey);
+  }
+
+  listBatches(): TaskBatch[] {
+    return this.batchOrder.map((id) => cloneBatch(this.batchesById.get(id)!));
+  }
+
   async create(record: WorkerTask): Promise<void> {
     if (this.byId.has(record.taskId)) throw new DuplicateTaskError(record.taskId);
-    if (this.byKey.has(record.requestKey)) throw new DuplicateRequestKeyError(record.requestKey);
+    if (this.hasRequestKey(record.requestKey)) {
+      throw new DuplicateRequestKeyError(record.requestKey);
+    }
     if (record.progress.length > MAX_TASK_PROGRESS) {
       throw new Error(`Task ${record.taskId} progress exceeds ${MAX_TASK_PROGRESS} entries`);
     }
@@ -235,6 +306,29 @@ export class TaskStore {
     return cloneTask(next);
   }
 
+  /**
+   * Persist one batch record. Batches are immutable — there is no update:
+   * the recorded accepted/rejected mapping is the dispatch-time truth.
+   * The requestKey must be free across both tasks and batches.
+   */
+  async createBatch(record: TaskBatch): Promise<void> {
+    if (this.batchesById.has(record.batchId)) throw new DuplicateBatchError(record.batchId);
+    if (this.hasRequestKey(record.requestKey)) {
+      throw new DuplicateRequestKeyError(record.requestKey);
+    }
+    this.batchesById.set(record.batchId, cloneBatch(record));
+    this.batchesByKey.set(record.requestKey, record.batchId);
+    this.batchOrder.push(record.batchId);
+    try {
+      await this.persist();
+    } catch (error) {
+      this.batchesById.delete(record.batchId);
+      this.batchesByKey.delete(record.requestKey);
+      this.batchOrder.pop();
+      throw error;
+    }
+  }
+
   private persist(): Promise<void> {
     const write = this.writeChain.then(() => this.writeNow());
     this.writeChain = write.catch(() => {});
@@ -248,6 +342,7 @@ export class TaskStore {
     const payload = {
       schemaVersion: TASK_STORE_SCHEMA_VERSION,
       tasks: this.list(),
+      batches: this.listBatches(),
     };
     try {
       await writeFile(tmp, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
@@ -263,6 +358,16 @@ export function requestFingerprint(workerId: string, message: string): string {
   return createHash('sha256').update(workerId).update('\0').update(message).digest('hex');
 }
 
+/**
+ * Fingerprint of a whole batch request over its ordered [workerId, message]
+ * pairs. Reordered or changed content is a different request; the prompts
+ * themselves are never stored.
+ */
+export function batchFingerprint(tasks: readonly BatchTaskInput[]): string {
+  const canonical = tasks.map((task) => [task.workerId, task.message]);
+  return createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
+}
+
 function cloneTask(record: WorkerTask): WorkerTask {
   return {
     ...record,
@@ -270,4 +375,8 @@ function cloneTask(record: WorkerTask): WorkerTask {
     usage: record.usage ? ({ ...record.usage } satisfies TaskUsage) : null,
     error: record.error ? ({ ...record.error } satisfies TaskErrorInfo) : null,
   };
+}
+
+function cloneBatch(record: TaskBatch): TaskBatch {
+  return { ...record, tasks: record.tasks.map((entry) => ({ ...entry })) };
 }

@@ -33,9 +33,28 @@
 Not in this slice: worker removal/rename, a recovery tool for
 `initialization_uncertain`, client abort, and MCP Experimental Tasks.
 
-## INIT-04 — Parallel workers & queues
+## INIT-04 — Multi-worker batch orchestration (done)
 
-- Multiple concurrent workers, per-worker FIFO task queues, notifications.
+- `dispatch_worker_batch`, `get_batch_status`, `get_batch_results`.
+- One task per worker dispatched concurrently through the existing
+  `dispatchTask` path — same busy lock, workspace check, and read-only
+  sandbox; no second executor.
+- Immutable batch records persisted in `tasks.json` alongside tasks:
+  `batchId`, batch requestKey, ordered worker↔task mapping, and
+  dispatch-time rejections (`DUPLICATE_WORKER`, `BATCH_LIMIT_EXCEEDED`,
+  `WORKER_BUSY`, ...). Batch requestKey shares the global keyspace; replay
+  returns the stored batch, different content is `REQUEST_KEY_CONFLICT`.
+- Aggregated status computed from real task records; results keep each
+  worker's own reply/usage/error (bounded per member) plus usage totals.
+  No AI summarization, no auto-retry of `unknown` tasks.
+
+Not in this slice: task cancellation, queues, DAG dependencies, automatic
+reviewer workflows, worker↔worker messaging, worktree automation, and
+registry pruning.
+
+## INIT-05 — Queues & notifications
+
+- Per-worker FIFO task queues, completion notifications.
 - Registry pruning and retention policy.
 
 ## Phase 2 — Additional runtimes

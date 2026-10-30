@@ -16,7 +16,8 @@ Codex Main → MCP Server → WorkerManager → Runtime Adapter → Codex Worker
 - **MCP Server** — this project. stdio transport,
   `@modelcontextprotocol/server` v2. Exposes `bridge_status`,
   `create_worker`, `list_workers`, `get_worker`, `send_worker_message`,
-  `dispatch_worker_task`, `get_task_status`, and `get_task_result`.
+  `dispatch_worker_task`, `get_task_status`, `get_task_result`,
+  `dispatch_worker_batch`, `get_batch_status`, and `get_batch_results`.
 - **WorkerManager** (`src/workers/`) — owns worker identity and lifecycle.
   Verifies the git workspace on every send, enforces one in-flight turn per
   worker (`busy`) for both synchronous sends and asynchronous tasks, and
@@ -37,11 +38,14 @@ Codex Main → MCP Server → WorkerManager → Runtime Adapter → Codex Worker
   tmp-file + rename; reads are schema-validated and corrupt files fail
   loudly instead of resetting.
 - **Task Store** (`src/storage/taskStore.ts`) — a separate JSON file
-  (`tasks.json`) for asynchronous tasks. It stores status, timestamps, the
-  native thread id, a bounded progress summary, the final assistant message,
-  and token usage. It does not store credentials or the raw event stream.
-  The same atomic write and corruption rules apply. `accepted` and `running`
-  tasks become `unknown` on open and are not re-executed.
+  (`tasks.json`) for asynchronous tasks and batches. It stores per-task
+  status, timestamps, the native thread id, a bounded progress summary, the
+  final assistant message, and token usage, plus immutable batch records
+  (worker↔task mapping and dispatch-time rejections). It does not store
+  credentials, member prompts, or the raw event stream. The same atomic
+  write and corruption rules apply. `accepted` and `running` tasks become
+  `unknown` on open and are not re-executed. A batch entry that references
+  a missing task id is treated as corruption and fails loudly.
 
 ## Thread lifecycle
 
@@ -87,6 +91,31 @@ does not copy a partial assistant message into a failed or unknown result.
 `taskId` is one message execution. `threadId` / `nativeThreadId` is the
 Codex thread. They are different ids.
 
+## Batches
+
+`dispatch_worker_batch` fans out one task per worker through the same
+`dispatchTask` path — same busy lock, workspace check, and replay rules.
+Each member derives its own requestKey `<requestKey>#<workerId>` and its own
+`taskId`; member prompts never mix and each worker still uses its persisted
+session. A `batchId` identifies the grouping and is independent of any
+`taskId`. Members are submitted concurrently and the call returns once each
+member is accepted or rejected — it never waits for a model turn, and it is
+not a transaction: accepted tasks survive sibling rejections.
+
+The batch requestKey is idempotent over the ordered `[workerId, message]`
+list and is unique across both tasks and batches. An identical replay
+returns the stored batch (`replayed: true`); different content under the
+same key, or a key already claimed by a lone task, is
+`REQUEST_KEY_CONFLICT`. A repeated `workerId` inside one batch, and members
+beyond `maxBatchTasks` (default 3, `AGENT_SESSION_BRIDGE_MAX_BATCH_TASKS`),
+are recorded as `rejected` with `DUPLICATE_WORKER` / `BATCH_LIMIT_EXCEEDED`.
+The stored batch record is immutable — it captures the dispatch-time
+outcome, while `get_batch_status` overlays the live task states to compute
+counts, `allSettled`, and `allCompleted`. `get_batch_results` returns each
+member's own reply, usage, thread id, and error (truncated per member,
+`NOT_READY` while running) with deterministic counts and usage totals; it
+never calls a model to summarize.
+
 The registry and the task store are written separately. If a task has a
 native thread id and `workers.json` does not have that same id, task reads
 report `association: "unconfirmed"`. Send and dispatch then refuse to start
@@ -100,10 +129,13 @@ server marks live tasks `unknown` and exits. A killed process leaves the
 same recovery to the next `TaskStore.open`. No turn is resumed, and a main
 session that already finished is not notified.
 
-## Boundaries (INIT-03)
+## Boundaries (INIT-04)
 
-- One active turn per worker. Different workers may run at the same time.
-  No task queue, DAG, or priority scheduler.
+- One active turn per worker. Different workers may run at the same time —
+  including members of one batch. No task queue, DAG, or priority scheduler;
+  a busy member is rejected, not queued.
+- Batch async execution is in-process like single tasks: members die with
+  the server and reopen as `unknown`, never re-dispatched.
 - `busy` is in-memory only; persisted worker states are
   `pending_initialization | initializing | ready |
   initialization_uncertain | error`.

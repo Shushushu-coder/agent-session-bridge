@@ -197,9 +197,100 @@ const taskResultOutputSchema = z.object({
   associationDetail: z.string().nullable(),
 });
 
+const batchTaskInputSchema = z.object({
+  workerId: z.string().min(1),
+  message: z.string().min(1),
+});
+
+const dispatchBatchInputSchema = z.object({
+  requestKey: z.string().min(1).max(256),
+  tasks: z.array(batchTaskInputSchema).min(1),
+});
+
+const batchIdInputSchema = z.object({
+  batchId: z.string().min(1),
+});
+
+const batchTaskViewSchema = z.object({
+  workerId: z.string(),
+  taskId: z.string().nullable(),
+  dispatchStatus: z.enum(['accepted', 'rejected']),
+  status: taskStatusSchema.nullable(),
+  nativeThreadId: z.string().nullable(),
+  errorCategory: z.string().nullable(),
+  errorMessage: z.string().nullable(),
+});
+
+const dispatchBatchOutputSchema = z.object({
+  batchId: z.string(),
+  requestKey: z.string(),
+  createdAt: z.string(),
+  replayed: z.boolean(),
+  dispatchedCount: z.number(),
+  rejectedCount: z.number(),
+  tasks: z.array(batchTaskViewSchema),
+});
+
+const batchStatusOutputSchema = z.object({
+  batchId: z.string(),
+  requestKey: z.string(),
+  createdAt: z.string(),
+  totalTasks: z.number(),
+  dispatchedCount: z.number(),
+  rejectedCount: z.number(),
+  statusCounts: z.object({
+    accepted: z.number(),
+    running: z.number(),
+    completed: z.number(),
+    failed: z.number(),
+    unknown: z.number(),
+  }),
+  allSettled: z.boolean(),
+  allCompleted: z.boolean(),
+  tasks: z.array(batchTaskViewSchema),
+});
+
+const batchTaskResultViewSchema = z.object({
+  workerId: z.string(),
+  taskId: z.string().nullable(),
+  dispatchStatus: z.enum(['accepted', 'rejected']),
+  status: z.enum(['completed', 'failed', 'unknown', 'NOT_READY']).nullable(),
+  nativeThreadId: z.string().nullable(),
+  response: z.string().nullable(),
+  responseLength: z.number(),
+  truncated: z.boolean(),
+  usage: usageOutputSchema.nullable(),
+  completedAt: z.string().nullable(),
+  errorCategory: z.string().nullable(),
+  errorMessage: z.string().nullable(),
+  association: associationSchema.nullable(),
+  associationDetail: z.string().nullable(),
+});
+
+const batchResultsOutputSchema = z.object({
+  batchId: z.string(),
+  requestKey: z.string(),
+  createdAt: z.string(),
+  totalTasks: z.number(),
+  dispatchedCount: z.number(),
+  rejectedCount: z.number(),
+  resultCounts: z.object({
+    completed: z.number(),
+    failed: z.number(),
+    unknown: z.number(),
+    notReady: z.number(),
+  }),
+  allSettled: z.boolean(),
+  allCompleted: z.boolean(),
+  usageTotals: usageOutputSchema.nullable(),
+  tasks: z.array(batchTaskResultViewSchema),
+});
+
 /**
- * Creates the MCP server. Keeps the INIT-02 tools and adds asynchronous
- * task dispatch: `dispatch_worker_task`, `get_task_status`, `get_task_result`.
+ * Creates the MCP server. Keeps the INIT-02 tools plus the INIT-03
+ * asynchronous task tools (`dispatch_worker_task`, `get_task_status`,
+ * `get_task_result`) and the INIT-04 multi-worker batch tools
+ * (`dispatch_worker_batch`, `get_batch_status`, `get_batch_results`).
  */
 export function createServer(deps: BridgeDeps): McpServer {
   const server = new McpServer({ name: BRIDGE_NAME, version: BRIDGE_VERSION });
@@ -352,6 +443,77 @@ export function createServer(deps: BridgeDeps): McpServer {
     async (args) => {
       try {
         return ok(deps.manager.getTaskResult(args.taskId));
+      } catch (error) {
+        return toolError(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'dispatch_worker_batch',
+    {
+      title: 'Dispatch Worker Batch',
+      description:
+        'Dispatches one independent task per worker in a single call and returns ' +
+        'a batchId plus the per-worker dispatch outcome immediately — accepted ' +
+        'members run concurrently in this process. Each member gets its own ' +
+        'derived requestKey, task id, and result; member prompts stay separate. ' +
+        'A repeated workerId or a member beyond the parallel cap is rejected ' +
+        'without affecting siblings. The same requestKey and task list replay ' +
+        'the stored batch; the same key with different content is ' +
+        'REQUEST_KEY_CONFLICT. Not a transaction: accepted tasks keep running ' +
+        'even when siblings were rejected.',
+      inputSchema: dispatchBatchInputSchema,
+      outputSchema: dispatchBatchOutputSchema,
+    },
+    async (args) => {
+      try {
+        const result = await deps.manager.dispatchBatch(args.requestKey, args.tasks);
+        return ok(result);
+      } catch (error) {
+        return toolError(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'get_batch_status',
+    {
+      title: 'Get Batch Status',
+      description:
+        'Aggregates the live status of every task in a batch: per-member ' +
+        'workerId/taskId/status, counts by state, and whether all members are ' +
+        'settled or all completed. Rejected members are listed with their ' +
+        'dispatch error. Counts are computed from the real task records.',
+      inputSchema: batchIdInputSchema,
+      outputSchema: batchStatusOutputSchema,
+    },
+    async (args) => {
+      try {
+        return ok(deps.manager.getBatchStatus(args.batchId));
+      } catch (error) {
+        return toolError(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'get_batch_results',
+    {
+      title: 'Get Batch Results',
+      description:
+        'Returns each member task result of a batch without merging replies: ' +
+        'per-worker status, truncated response, usage, native thread id, and ' +
+        'error, plus deterministic counts and usage totals. Members still ' +
+        'running report NOT_READY; failed and unknown members keep their real ' +
+        'error and no invented response. Responses are capped per member — ' +
+        'use get_task_result for the full text.',
+      inputSchema: batchIdInputSchema,
+      outputSchema: batchResultsOutputSchema,
+    },
+    async (args) => {
+      try {
+        return ok(deps.manager.getBatchResults(args.batchId));
       } catch (error) {
         return toolError(error);
       }

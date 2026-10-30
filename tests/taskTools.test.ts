@@ -60,6 +60,7 @@ describe('async task MCP tools', () => {
       finalStatus = (status.structuredContent as { status: string }).status;
       if (finalStatus !== 'completed') await new Promise((resolve) => setTimeout(resolve, 20));
     }
+    await stack.deps.manager.whenTaskSettled(taskId);
 
     const result = await stack.client.callTool({
       name: 'get_task_result',
@@ -93,10 +94,11 @@ describe('async task MCP tools', () => {
     });
     expect(missing.isError).toBe(true);
 
-    await stack.client.callTool({
+    const first = await stack.client.callTool({
       name: 'dispatch_worker_task',
       arguments: { workerId, message: 'first', requestKey: 'once' },
     });
+    const firstTaskId = (first.structuredContent as { taskId: string }).taskId;
     const busy = await stack.client.callTool({
       name: 'dispatch_worker_task',
       arguments: { workerId, message: 'second', requestKey: 'twice' },
@@ -105,7 +107,7 @@ describe('async task MCP tools', () => {
     expect(JSON.stringify(busy.structuredContent)).toContain('WORKER_BUSY');
 
     release();
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await stack.deps.manager.whenTaskSettled(firstTaskId);
     const conflict = await stack.client.callTool({
       name: 'dispatch_worker_task',
       arguments: { workerId, message: 'other', requestKey: 'once' },

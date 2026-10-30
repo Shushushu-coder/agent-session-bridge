@@ -96,7 +96,10 @@ describe('MCP stdio smoke test', () => {
         expect(tools.map((t) => t.name).sort()).toEqual([
           'bridge_status',
           'create_worker',
+          'dispatch_worker_batch',
           'dispatch_worker_task',
+          'get_batch_results',
+          'get_batch_status',
           'get_task_result',
           'get_task_status',
           'get_worker',
@@ -350,6 +353,183 @@ describe('MCP stdio smoke test', () => {
       } finally {
         await second.client.close();
         await waitForExit(second.pid);
+      }
+    },
+  );
+
+  it(
+    'dispatches a worker batch over stdio and reads aggregated status and results',
+    { timeout: 30000 },
+    async () => {
+      const dataDir = await tempDataDir();
+      const server = await spawnFakeServer(dataDir, {
+        AGENT_SESSION_BRIDGE_STREAM_DELAY_MS: '150',
+      });
+      try {
+        const workerIds: string[] = [];
+        for (const name of ['backend', 'frontend', 'reviewer']) {
+          const created = await server.client.callTool({
+            name: 'create_worker',
+            arguments: { name, workspacePath: 'E:\\ws' },
+          });
+          workerIds.push(
+            (created.structuredContent as { worker: { workerId: string } }).worker.workerId,
+          );
+        }
+
+        const dispatched = await server.client.callTool({
+          name: 'dispatch_worker_batch',
+          arguments: {
+            requestKey: 'smoke-batch',
+            tasks: workerIds.map((workerId, index) => ({
+              workerId,
+              message: `read-only audit ${index}`,
+            })),
+          },
+        });
+        expect(dispatched.isError).toBeFalsy();
+        expect(dispatched.structuredContent).toMatchObject({
+          dispatchedCount: 3,
+          rejectedCount: 0,
+          replayed: false,
+        });
+        const batchId = (dispatched.structuredContent as { batchId: string }).batchId;
+
+        let settled = false;
+        for (let attempt = 0; attempt < 60 && !settled; attempt += 1) {
+          const status = await server.client.callTool({
+            name: 'get_batch_status',
+            arguments: { batchId },
+          });
+          settled = (status.structuredContent as { allSettled: boolean }).allSettled;
+          if (!settled) await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        expect(settled).toBe(true);
+
+        const results = await server.client.callTool({
+          name: 'get_batch_results',
+          arguments: { batchId },
+        });
+        expect(results.structuredContent).toMatchObject({
+          allCompleted: true,
+          resultCounts: { completed: 3, failed: 0, unknown: 0, notReady: 0 },
+          usageTotals: { input_tokens: 9 },
+        });
+      } finally {
+        await server.client.close();
+        await waitForExit(server.pid);
+      }
+    },
+  );
+
+  it(
+    'restores a finished batch and its task mapping after a process restart',
+    { timeout: 30000 },
+    async () => {
+      const dataDir = await tempDataDir();
+      const now = new Date().toISOString();
+      await writeFile(
+        join(dataDir, 'workers.json'),
+        JSON.stringify({
+          schemaVersion: 1,
+          workers: [
+            {
+              workerId: 'wrk_restart1',
+              name: 'restored',
+              runtime: 'codex',
+              threadId: 'thread_from_past_life',
+              workspacePath: 'E:\\Projects\\agent-session-bridge',
+              state: 'ready',
+              createdAt: now,
+              updatedAt: now,
+            },
+          ],
+        }),
+        'utf8',
+      );
+      await writeFile(
+        join(dataDir, 'tasks.json'),
+        JSON.stringify({
+          schemaVersion: 1,
+          tasks: [
+            {
+              taskId: 'task_batch_member',
+              workerId: 'wrk_restart1',
+              requestKey: 'old-batch#wrk_restart1',
+              requestFingerprint: 'fp',
+              status: 'completed',
+              createdAt: now,
+              startedAt: now,
+              updatedAt: now,
+              completedAt: now,
+              nativeThreadId: 'thread_from_past_life',
+              progress: [],
+              result: 'batch member reply',
+              usage: null,
+              error: null,
+            },
+          ],
+          batches: [
+            {
+              batchId: 'batch_restored',
+              requestKey: 'old-batch',
+              requestFingerprint: 'fpb',
+              createdAt: now,
+              tasks: [
+                { workerId: 'wrk_restart1', taskId: 'task_batch_member', dispatchStatus: 'accepted' },
+                {
+                  workerId: 'wrk_gone',
+                  taskId: null,
+                  dispatchStatus: 'rejected',
+                  errorCategory: 'WORKER_NOT_FOUND',
+                },
+              ],
+            },
+          ],
+        }),
+        'utf8',
+      );
+
+      const server = await spawnServer(dataDir);
+      try {
+        const status = await server.client.callTool({
+          name: 'get_batch_status',
+          arguments: { batchId: 'batch_restored' },
+        });
+        expect(status.isError).toBeFalsy();
+        expect(status.structuredContent).toMatchObject({
+          totalTasks: 2,
+          dispatchedCount: 1,
+          rejectedCount: 1,
+          allSettled: true,
+          allCompleted: true,
+          statusCounts: { completed: 1 },
+        });
+
+        const results = await server.client.callTool({
+          name: 'get_batch_results',
+          arguments: { batchId: 'batch_restored' },
+        });
+        expect(results.structuredContent).toMatchObject({
+          resultCounts: { completed: 1 },
+          tasks: [
+            {
+              workerId: 'wrk_restart1',
+              taskId: 'task_batch_member',
+              status: 'completed',
+              response: 'batch member reply',
+            },
+            {
+              workerId: 'wrk_gone',
+              taskId: null,
+              dispatchStatus: 'rejected',
+              errorCategory: 'WORKER_NOT_FOUND',
+            },
+          ],
+        });
+      } finally {
+        await server.client.close();
+        await waitForExit(server.pid);
       }
     },
   );

@@ -1,4 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto';
+import type { BatchTaskEntry, BatchTaskInput, TaskBatch } from '../contracts/batch.js';
+import { DEFAULT_MAX_BATCH_TASKS, MAX_BATCH_RESPONSE_CHARS } from '../contracts/batch.js';
 import type { AgentRuntimeAdapter, RuntimeStreamEvent } from '../contracts/runtime.js';
 import type {
   AgentTask,
@@ -19,6 +21,7 @@ import { CodexAdapterError } from '../runtime/codex/codexRuntimeAdapter.js';
 import { redactSensitive } from '../storage/redact.js';
 import type { SessionRegistry } from '../storage/sessionRegistry.js';
 import {
+  batchFingerprint,
   DuplicateRequestKeyError,
   requestFingerprint,
   type TaskPatch,
@@ -34,6 +37,8 @@ export type WorkerErrorCode =
   | 'WORKER_BUSY'
   | 'REQUEST_KEY_CONFLICT'
   | 'TASK_NOT_FOUND'
+  | 'BATCH_NOT_FOUND'
+  | 'INVALID_INPUT'
   | 'INTERNAL';
 
 /** Call-level rejection; the server layer renders these as `isError` results. */
@@ -59,6 +64,8 @@ export interface WorkerManagerOptions {
   adapter: AgentRuntimeAdapter;
   verifyWorkspace?: WorkspaceVerifier;
   idGenerator?: () => string;
+  /** Maximum tasks one batch may dispatch. Defaults to DEFAULT_MAX_BATCH_TASKS. */
+  maxBatchTasks?: number;
 }
 
 export interface DispatchTaskResult {
@@ -101,6 +108,78 @@ export interface TaskResultView {
   associationDetail: string | null;
 }
 
+/** One batch member as returned by dispatch_worker_batch / get_batch_status. */
+export interface BatchTaskView {
+  workerId: string;
+  taskId: string | null;
+  dispatchStatus: 'accepted' | 'rejected';
+  /** Current task status for accepted members; null for rejected ones. */
+  status: TaskStatus | null;
+  nativeThreadId: string | null;
+  /** Rejection code, or the task's own error category once terminal. */
+  errorCategory: string | null;
+  errorMessage: string | null;
+}
+
+export interface DispatchBatchResult {
+  batchId: string;
+  requestKey: string;
+  createdAt: string;
+  replayed: boolean;
+  dispatchedCount: number;
+  rejectedCount: number;
+  tasks: BatchTaskView[];
+}
+
+export interface BatchStatusView {
+  batchId: string;
+  requestKey: string;
+  createdAt: string;
+  totalTasks: number;
+  dispatchedCount: number;
+  rejectedCount: number;
+  statusCounts: Record<TaskStatus, number>;
+  /** True when no accepted member is still live (accepted/running). */
+  allSettled: boolean;
+  /** True only when every dispatched task completed — not merely finished. */
+  allCompleted: boolean;
+  tasks: BatchTaskView[];
+}
+
+/** One batch member inside a get_batch_results reply. */
+export interface BatchTaskResultView {
+  workerId: string;
+  taskId: string | null;
+  dispatchStatus: 'accepted' | 'rejected';
+  status: 'completed' | 'failed' | 'unknown' | 'NOT_READY' | null;
+  nativeThreadId: string | null;
+  /** Truncated to MAX_BATCH_RESPONSE_CHARS; read get_task_result for the full reply. */
+  response: string | null;
+  responseLength: number;
+  truncated: boolean;
+  usage: TaskUsage | null;
+  completedAt: string | null;
+  errorCategory: string | null;
+  errorMessage: string | null;
+  association: TaskAssociation | null;
+  associationDetail: string | null;
+}
+
+export interface BatchResultsView {
+  batchId: string;
+  requestKey: string;
+  createdAt: string;
+  totalTasks: number;
+  dispatchedCount: number;
+  rejectedCount: number;
+  resultCounts: { completed: number; failed: number; unknown: number; notReady: number };
+  allSettled: boolean;
+  allCompleted: boolean;
+  /** Sum of token usage over tasks that recorded any; null when none did. */
+  usageTotals: TaskUsage | null;
+  tasks: BatchTaskResultView[];
+}
+
 const LIVE_TASK: readonly TaskStatus[] = ['accepted', 'running'];
 
 /**
@@ -119,11 +198,13 @@ export class WorkerManager {
   private readonly verifyWorkspace: WorkspaceVerifier;
   private readonly idGenerator: () => string;
   private readonly taskStore: TaskStore;
+  private readonly maxBatchTasks: number;
 
   constructor(private readonly options: WorkerManagerOptions) {
     this.verifyWorkspace = options.verifyWorkspace ?? verifyGitWorkspace;
     this.idGenerator = options.idGenerator ?? defaultWorkerId;
     this.taskStore = options.taskStore;
+    this.maxBatchTasks = Math.max(1, options.maxBatchTasks ?? DEFAULT_MAX_BATCH_TASKS);
   }
 
   async createWorker(input: CreateWorkerInput): Promise<WorkerView> {
@@ -379,6 +460,219 @@ export class WorkerManager {
       completedAt: task.completedAt,
       error: { ...error },
       message: error.message,
+    };
+  }
+
+  /**
+   * Dispatch one task per worker from a single idempotent request. Each
+   * member derives its own requestKey (`<requestKey>#<workerId>`) and runs
+   * through the same path as dispatch_worker_task — same busy lock, same
+   * workspace verification, same replay rules. Members are submitted
+   * concurrently and the call returns once every member was accepted or
+   * rejected; it never waits for a model turn to finish.
+   *
+   * This is not a transaction: accepted tasks keep running and stay
+   * queryable even when sibling members were rejected. The persisted batch
+   * records the honest dispatch-time outcome per member and never changes
+   * afterwards. A fully identical replay returns the stored batch without
+   * starting anything new; the same requestKey with different content is
+   * REQUEST_KEY_CONFLICT.
+   */
+  async dispatchBatch(
+    requestKey: string,
+    inputs: readonly BatchTaskInput[],
+  ): Promise<DispatchBatchResult> {
+    if (inputs.length === 0) {
+      throw new WorkerToolError('INVALID_INPUT', 'dispatch_worker_batch requires at least one task');
+    }
+    const fingerprint = batchFingerprint(inputs);
+    const existing = this.taskStore.getBatchByRequestKey(requestKey);
+    if (existing) {
+      if (existing.requestFingerprint !== fingerprint) throw this.conflictError(requestKey);
+      return this.batchDispatchView(existing, true);
+    }
+    if (this.taskStore.getByRequestKey(requestKey)) throw this.conflictError(requestKey);
+
+    // Structural rejections first: a repeated workerId and members beyond
+    // the parallel cap never reach dispatch.
+    const seen = new Set<string>();
+    const entries: BatchTaskEntry[] = inputs.map((input) => {
+      if (seen.has(input.workerId)) {
+        return {
+          workerId: input.workerId,
+          taskId: null,
+          dispatchStatus: 'rejected' as const,
+          errorCategory: 'DUPLICATE_WORKER',
+          errorMessage: `worker ${input.workerId} appears more than once in this batch`,
+        };
+      }
+      seen.add(input.workerId);
+      return { workerId: input.workerId, taskId: null, dispatchStatus: 'rejected' as const };
+    });
+    let slots = this.maxBatchTasks;
+    const eligible: number[] = [];
+    entries.forEach((entry, index) => {
+      if (entry.errorCategory) return;
+      if (slots <= 0) {
+        entry.errorCategory = 'BATCH_LIMIT_EXCEEDED';
+        entry.errorMessage = `a batch dispatches at most ${this.maxBatchTasks} task(s)`;
+        return;
+      }
+      slots -= 1;
+      eligible.push(index);
+    });
+
+    await Promise.all(
+      eligible.map(async (index) => {
+        const input = inputs[index]!;
+        const entry = entries[index]!;
+        try {
+          const result = await this.dispatchTask(
+            input.workerId,
+            input.message,
+            batchTaskKey(requestKey, input.workerId),
+          );
+          entry.taskId = result.taskId;
+          entry.dispatchStatus = 'accepted';
+        } catch (error) {
+          if (error instanceof WorkerToolError) {
+            entry.errorCategory = error.code;
+            entry.errorMessage = redactSensitive(error.message);
+          } else {
+            entry.errorCategory = 'INTERNAL';
+            entry.errorMessage = redactSensitive(
+              error instanceof Error ? error.message : String(error),
+            );
+          }
+        }
+      }),
+    );
+
+    const batch: TaskBatch = {
+      batchId: `batch_${randomBytes(8).toString('hex')}`,
+      requestKey,
+      requestFingerprint: fingerprint,
+      createdAt: new Date().toISOString(),
+      tasks: entries,
+    };
+    try {
+      await this.taskStore.createBatch(batch);
+    } catch (error) {
+      if (error instanceof DuplicateRequestKeyError) {
+        const raced = this.taskStore.getBatchByRequestKey(requestKey);
+        if (raced && raced.requestFingerprint === fingerprint) {
+          return this.batchDispatchView(raced, true);
+        }
+        throw this.conflictError(requestKey);
+      }
+      throw error;
+    }
+    return this.batchDispatchView(batch, false);
+  }
+
+  /**
+   * Aggregate the live task states of one batch. Counts are computed from
+   * the real task records at read time — the stored batch only contributes
+   * the worker↔task mapping and the dispatch-time rejections.
+   */
+  getBatchStatus(batchId: string): BatchStatusView {
+    const batch = this.requireBatch(batchId);
+    const tasks = batch.tasks.map((entry) => this.batchTaskView(entry));
+    const statusCounts: Record<TaskStatus, number> = {
+      accepted: 0,
+      running: 0,
+      completed: 0,
+      failed: 0,
+      unknown: 0,
+    };
+    for (const view of tasks) {
+      if (view.status) statusCounts[view.status] += 1;
+    }
+    const dispatchedCount = tasks.filter((view) => view.dispatchStatus === 'accepted').length;
+    return {
+      batchId: batch.batchId,
+      requestKey: batch.requestKey,
+      createdAt: batch.createdAt,
+      totalTasks: batch.tasks.length,
+      dispatchedCount,
+      rejectedCount: tasks.length - dispatchedCount,
+      statusCounts,
+      allSettled: statusCounts.accepted + statusCounts.running === 0,
+      allCompleted: dispatchedCount > 0 && statusCounts.completed === dispatchedCount,
+      tasks,
+    };
+  }
+
+  /**
+   * Read every member's stored result in one call. Responses are capped at
+   * MAX_BATCH_RESPONSE_CHARS each — flagged `truncated` — because the batch
+   * reply must stay bounded; get_task_result returns the full text.
+   * Running members report NOT_READY and failed/unknown members keep their
+   * real error; nothing is merged across workers and nothing is invented.
+   */
+  getBatchResults(batchId: string): BatchResultsView {
+    const batch = this.requireBatch(batchId);
+    const resultCounts = { completed: 0, failed: 0, unknown: 0, notReady: 0 };
+    let usageTotals: TaskUsage | null = null;
+    const tasks = batch.tasks.map((entry): BatchTaskResultView => {
+      if (entry.dispatchStatus === 'rejected' || !entry.taskId) {
+        return {
+          workerId: entry.workerId,
+          taskId: null,
+          dispatchStatus: 'rejected',
+          status: null,
+          nativeThreadId: null,
+          response: null,
+          responseLength: 0,
+          truncated: false,
+          usage: null,
+          completedAt: null,
+          errorCategory: entry.errorCategory ?? null,
+          errorMessage: entry.errorMessage ?? null,
+          association: null,
+          associationDetail: null,
+        };
+      }
+      const result = this.getTaskResult(entry.taskId);
+      if (result.status === 'NOT_READY') resultCounts.notReady += 1;
+      else resultCounts[result.status] += 1;
+      if (result.usage) {
+        usageTotals = usageTotals ? addUsage(usageTotals, result.usage) : { ...result.usage };
+      }
+      const fullLength = result.response?.length ?? 0;
+      const truncated = fullLength > MAX_BATCH_RESPONSE_CHARS;
+      return {
+        workerId: entry.workerId,
+        taskId: entry.taskId,
+        dispatchStatus: 'accepted',
+        status: result.status,
+        nativeThreadId: result.nativeThreadId,
+        response: truncated
+          ? `${result.response!.slice(0, MAX_BATCH_RESPONSE_CHARS)}…`
+          : result.response,
+        responseLength: fullLength,
+        truncated,
+        usage: result.usage,
+        completedAt: result.completedAt,
+        errorCategory: result.error?.category ?? null,
+        errorMessage: result.error?.message ?? result.message,
+        association: result.association,
+        associationDetail: result.associationDetail,
+      };
+    });
+    const dispatchedCount = tasks.filter((view) => view.dispatchStatus === 'accepted').length;
+    return {
+      batchId: batch.batchId,
+      requestKey: batch.requestKey,
+      createdAt: batch.createdAt,
+      totalTasks: batch.tasks.length,
+      dispatchedCount,
+      rejectedCount: tasks.length - dispatchedCount,
+      resultCounts,
+      allSettled: resultCounts.notReady === 0,
+      allCompleted: dispatchedCount > 0 && resultCounts.completed === dispatchedCount,
+      usageTotals,
+      tasks,
     };
   }
 
@@ -838,7 +1132,11 @@ export class WorkerManager {
     requestKey: string,
   ): { kind: 'fresh' } | { kind: 'conflict' } | { kind: 'replay'; view: DispatchTaskResult } {
     const existing = this.taskStore.getByRequestKey(requestKey);
-    if (!existing) return { kind: 'fresh' };
+    if (!existing) {
+      // A batch claim on this key is still a conflict for a lone task.
+      if (this.taskStore.getBatchByRequestKey(requestKey)) return { kind: 'conflict' };
+      return { kind: 'fresh' };
+    }
     if (existing.requestFingerprint !== requestFingerprint(workerId, message)) {
       return { kind: 'conflict' };
     }
@@ -872,6 +1170,46 @@ export class WorkerManager {
     const task = this.taskStore.get(taskId);
     if (!task) throw new WorkerToolError('TASK_NOT_FOUND', `no task with id ${taskId}`);
     return task;
+  }
+
+  private requireBatch(batchId: string): TaskBatch {
+    const batch = this.taskStore.getBatch(batchId);
+    if (!batch) throw new WorkerToolError('BATCH_NOT_FOUND', `no batch with id ${batchId}`);
+    return batch;
+  }
+
+  private batchDispatchView(batch: TaskBatch, replayed: boolean): DispatchBatchResult {
+    const tasks = batch.tasks.map((entry) => this.batchTaskView(entry));
+    const dispatchedCount = tasks.filter((view) => view.dispatchStatus === 'accepted').length;
+    return {
+      batchId: batch.batchId,
+      requestKey: batch.requestKey,
+      createdAt: batch.createdAt,
+      replayed,
+      dispatchedCount,
+      rejectedCount: tasks.length - dispatchedCount,
+      tasks,
+    };
+  }
+
+  /**
+   * Live view of one batch member: the stored dispatch outcome overlaid
+   * with the task's current status. For a rejected member the error fields
+   * carry the dispatch-time rejection; for an accepted one they carry the
+   * task's own terminal error when there is one.
+   */
+  private batchTaskView(entry: BatchTaskEntry): BatchTaskView {
+    const task = entry.taskId ? this.taskStore.get(entry.taskId) : undefined;
+    const rejected = entry.dispatchStatus === 'rejected';
+    return {
+      workerId: entry.workerId,
+      taskId: entry.taskId,
+      dispatchStatus: entry.dispatchStatus,
+      status: task?.status ?? null,
+      nativeThreadId: task?.nativeThreadId ?? null,
+      errorCategory: rejected ? (entry.errorCategory ?? null) : (task?.error?.category ?? null),
+      errorMessage: rejected ? (entry.errorMessage ?? null) : (task?.error?.message ?? null),
+    };
   }
 
   /**
@@ -1018,4 +1356,19 @@ function defaultWorkerId(): string {
 
 function defaultTaskId(): string {
   return `task_${randomBytes(8).toString('hex')}`;
+}
+
+/** Per-member idempotency key inside a batch: unique because workerIds are. */
+function batchTaskKey(requestKey: string, workerId: string): string {
+  return `${requestKey}#${workerId}`;
+}
+
+function addUsage(a: TaskUsage, b: TaskUsage): TaskUsage {
+  return {
+    input_tokens: a.input_tokens + b.input_tokens,
+    cached_input_tokens: a.cached_input_tokens + b.cached_input_tokens,
+    cache_write_input_tokens: a.cache_write_input_tokens + b.cache_write_input_tokens,
+    output_tokens: a.output_tokens + b.output_tokens,
+    reasoning_output_tokens: a.reasoning_output_tokens + b.reasoning_output_tokens,
+  };
 }

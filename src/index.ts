@@ -54,7 +54,13 @@ try {
   );
 }
 
-const manager = new WorkerManager({ registry, taskStore, adapter });
+const maxBatchTasks = Number(process.env.AGENT_SESSION_BRIDGE_MAX_BATCH_TASKS ?? '');
+const manager = new WorkerManager({
+  registry,
+  taskStore,
+  adapter,
+  ...(Number.isInteger(maxBatchTasks) && maxBatchTasks > 0 ? { maxBatchTasks } : {}),
+});
 
 const handle = serveStdio(() => createServer({ manager, adapter, registry }), {
   onerror(error) {
