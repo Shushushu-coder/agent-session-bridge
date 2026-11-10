@@ -95,6 +95,13 @@ export interface WorkerTask {
    * runtime does not report which model it actually ran.
    */
   requestedModel: string | null;
+  /**
+   * Bounded single-line preview of the dispatched message (redacted,
+   * truncated) so dashboards can say what the task is about without
+   * storing the full prompt. Null for records written before labels
+   * existed.
+   */
+  label: string | null;
   progress: TaskProgressEntry[];
   /** Final assistant message. Set only after `turn.completed`. */
   result: string | null;

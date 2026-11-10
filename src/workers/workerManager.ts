@@ -396,6 +396,7 @@ export class WorkerManager {
         completedAt: null,
         nativeThreadId: null,
         requestedModel: this.resolveModel(record.model).model,
+        label: taskLabel(message),
         progress: [],
         result: null,
         usage: null,
@@ -791,6 +792,7 @@ export class WorkerManager {
       taskId: task.taskId,
       workerId: task.workerId,
       requestKey: task.requestKey,
+      label: task.label,
       status: task.status,
       createdAt: task.createdAt,
       updatedAt: task.updatedAt,
@@ -1513,6 +1515,11 @@ function defaultWorkerId(): string {
 
 function defaultSessionId(): string {
   return `ses_${randomBytes(6).toString('hex')}`;
+}
+
+/** Bounded, single-line, redacted preview of a dispatched message. */
+function taskLabel(message: string): string {
+  return redactSensitive(message).replace(/\s+/g, ' ').trim().slice(0, 160);
 }
 
 function defaultTaskId(): string {

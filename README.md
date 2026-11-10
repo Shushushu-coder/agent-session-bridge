@@ -247,14 +247,14 @@ text. `get_board_snapshot` is also a plain tool — a main session can
 call it directly for the same data, and `open_worker_board` falls back
 to the same JSON snapshot on hosts without app rendering.
 
-Snapshots are **session-scoped** by default: each bridge server process
-stamps the workers it creates with a `sessionId`, and the board shows
-only the current server's workers, tasks, and batches so other Codex
-windows' workers stay out of the way. The stat strip shows a
-`+N other-session` toggle (and `get_board_snapshot` accepts
-`scope: "all"`) whenever a wider view is needed — handy right after a
-Codex restart, when pre-restart workers count as a previous session but
-remain resumable through the other tools.
+Snapshots are **session-scoped** in the board: each bridge server
+process stamps the workers it creates with a `sessionId`, and the board
+always shows only the current server's workers, tasks, and batches —
+workers from other Codex windows (or from before a restart) never
+appear. Each worker card shows the model it will request, the current
+task's label (a bounded, redacted preview of its dispatch message), and
+live progress; `get_board_snapshot` still accepts `scope: "all"` for a
+main session that wants the global view programmatically.
 
 ```toml
 # ~/.codex/config.toml — only needed on builds where Apps are not default

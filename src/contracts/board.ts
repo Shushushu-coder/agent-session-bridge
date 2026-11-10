@@ -6,6 +6,8 @@ export interface BoardTaskSummary {
   taskId: string;
   workerId: string;
   requestKey: string;
+  /** Bounded preview of the dispatched message; null on legacy records. */
+  label: string | null;
   status: TaskStatus;
   createdAt: string;
   updatedAt: string;

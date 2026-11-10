@@ -53,6 +53,8 @@ const taskSchema = z.object({
   nativeThreadId: z.string().min(1).nullable(),
   // Optional so files written before requestedModel existed still load.
   requestedModel: z.string().min(1).nullable().default(null),
+  // Optional so files written before task labels existed still load.
+  label: z.string().min(1).nullable().default(null),
   progress: z.array(progressSchema).max(MAX_TASK_PROGRESS),
   result: z.string().nullable(),
   usage: usageSchema.nullable(),

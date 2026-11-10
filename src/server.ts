@@ -305,6 +305,7 @@ const boardTaskSummarySchema = z.object({
   taskId: z.string(),
   workerId: z.string(),
   requestKey: z.string(),
+  label: z.string().nullable(),
   status: taskStatusSchema,
   createdAt: z.string(),
   updatedAt: z.string(),

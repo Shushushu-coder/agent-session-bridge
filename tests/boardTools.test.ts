@@ -41,10 +41,15 @@ interface SnapshotBody {
     taskCount: number;
     activeTaskId: string | null;
     usageTotals: { output_tokens: number } | null;
-    latestTask: { taskId: string; status: string; progressCount: number } | null;
+    latestTask: {
+      taskId: string;
+      status: string;
+      progressCount: number;
+      label: string | null;
+    } | null;
     resumeHint: string | null;
   }[];
-  recentTasks: { taskId: string; workerId: string; status: string }[];
+  recentTasks: { taskId: string; workerId: string; status: string; label: string | null }[];
   recentBatches: {
     batchId: string;
     dispatchedCount: number;
@@ -104,6 +109,9 @@ describe('board MCP tools', () => {
       expect(w.activeTaskId).toBeNull();
       expect(w.latestTask?.status).toBe('completed');
       expect(w.latestTask?.progressCount).toBeGreaterThan(0);
+      expect(w.latestTask?.label).toBe(
+        workerId === backend ? 'audit backend' : 'audit frontend',
+      );
       expect(w.usageTotals?.output_tokens).toBeGreaterThan(0);
     }
     expect(body.recentTasks.length).toBe(2);

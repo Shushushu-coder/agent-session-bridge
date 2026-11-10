@@ -60,8 +60,6 @@ h2.live-h { color: var(--c-busy); }
 }
 .stat-busy { color: var(--c-busy); border-color: var(--c-busy); }
 .stat-err { color: var(--c-err); border-color: var(--c-err); }
-button.stat { cursor: pointer; }
-button.stat:hover { border-color: var(--accent); }
 
 .wcard {
   border: 1px solid var(--border); border-left: 3px solid var(--border);
@@ -73,6 +71,7 @@ button.stat:hover { border-color: var(--accent); }
 .wtop { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .wname { font-weight: 600; }
 .wline { display: flex; align-items: center; gap: 6px; margin-top: 4px; font-size: 11px; }
+.model-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
 .err-text { color: var(--c-err); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .taskline {

@@ -30,6 +30,7 @@ function task(overrides: Partial<WorkerTask> = {}): WorkerTask {
     completedAt: now,
     nativeThreadId: 'thread_alpha',
     requestedModel: null,
+    label: 'hello',
     progress: [{ at: now, kind: 'turn.completed', summary: 'turn completed' }],
     result: 'done',
     usage: {

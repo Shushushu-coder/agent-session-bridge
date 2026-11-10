@@ -10,13 +10,12 @@ const POLL_MS = 1500;
 const HISTORY_LIMIT = 8;
 const LIVE_STATUSES = new Set(['accepted', 'running']);
 const root = document.getElementById('app')!;
-const app = new App({ name: 'agent-session-bridge-board', version: '0.5.0' });
+const app = new App({ name: 'agent-session-bridge-board', version: '0.6.0' });
 
 let timer: ReturnType<typeof setInterval> | null = null;
 let lastError: string | null = null;
 let snapshot: BoardSnapshot | null = null;
 let inflight = false;
-let scope: 'session' | 'all' = 'session';
 
 function el(tag: string, cls?: string, text?: string): HTMLElement {
   const node = document.createElement(tag);
@@ -39,11 +38,6 @@ function fmtNum(n: number): string {
   if (n >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
   if (n >= 1e3) return `${(n / 1e3).toFixed(1)}k`;
   return `${n}`;
-}
-
-function fmtTokens(usage: BoardTaskSummary['usage']): string {
-  if (!usage) return '—';
-  return `${fmtNum(usage.output_tokens)} out · ${fmtNum(usage.input_tokens)} in`;
 }
 
 /** "2m10s" between two ISO stamps; `toIso` null/omitted means now. */
@@ -76,12 +70,15 @@ async function toggleDisplayMode(): Promise<void> {
   render();
 }
 
+/** Model the worker will request, or a readable marker for runtime default. */
+function modelOf(w: BoardWorkerView): string {
+  if (w.effectiveModel) return w.effectiveModel;
+  return w.modelSource === 'runtime_default' ? 'runtime default' : '—';
+}
+
 function batchLine(b: BoardBatchSummary): HTMLElement {
   const row = el('div', 'taskline');
-  const id = el('span');
-  id.append(el('span', 'wname', b.requestKey));
-  id.append(el('span', 'dim mono', ` ${b.batchId.slice(0, 20)}`));
-  row.append(id);
+  row.append(el('span', 'wname', b.requestKey));
   row.append(
     el(
       'span',
@@ -109,12 +106,13 @@ function taskLine(t: BoardTaskSummary, nameOf: (id: string) => string, live: boo
   const row = el('div', `taskline${live ? ' live' : ''}`);
   row.append(el('span', live ? 'wname' : 'dim', nameOf(t.workerId)));
   row.append(chip(t.status));
-  const p = el('span', 'dim progress-text grow2', t.lastProgress?.summary ?? '');
-  p.title = t.lastProgress?.summary ?? '';
+  const detail = live ? (t.lastProgress?.summary ?? t.label ?? '') : (t.label ?? '');
+  const p = el('span', 'dim progress-text grow2', detail);
+  p.title = detail;
   row.append(p);
   const timing = live
     ? fmtDur(t.startedAt ?? t.createdAt)
-    : `${fmtDur(t.startedAt, t.completedAt)} · ${fmtTime(t.completedAt ?? t.updatedAt)}`;
+    : `${fmtDur(t.startedAt, t.completedAt)} · ${fmtNum(t.usage?.output_tokens ?? 0)} out · ${fmtTime(t.completedAt ?? t.updatedAt)}`;
   row.append(el('span', 'dim mono', timing));
   return row;
 }
@@ -124,21 +122,32 @@ function workerCard(w: BoardWorkerView): HTMLElement {
   const top = el('div', 'wtop');
   top.append(el('span', 'wname', w.name), chip(w.state));
   card.append(top);
+
+  // Model line — what this worker will request on its next turn.
+  const model = el('div', 'wline dim mono model-line', modelOf(w));
+  model.title = modelOf(w);
+  card.append(model);
+
   const t = w.latestTask;
   if (t) {
+    // What it's doing: status + the task's own label.
     const line = el('div', 'wline');
     line.append(chip(t.status));
-    const p = el('span', 'dim progress-text', t.lastProgress?.summary ?? '');
-    p.title = t.lastProgress?.summary ?? '';
-    line.append(p);
+    const label = el('span', 'progress-text', t.label ?? t.lastProgress?.summary ?? '');
+    label.title = t.label ?? '';
+    line.append(label);
     card.append(line);
-    card.append(
-      el(
-        'div',
-        'wline dim',
-        `${w.taskCount} task(s) · ${fmtTokens(w.usageTotals)} · ${fmtTime(t.updatedAt)}`,
-      ),
-    );
+
+    // Progress meta: elapsed & event count live; duration & tokens settled.
+    const meta = LIVE_STATUSES.has(t.status)
+      ? `${fmtDur(t.startedAt ?? t.createdAt)} · ${t.progressCount} events` +
+        (t.lastProgress?.summary ? ` — ${t.lastProgress.summary}` : '')
+      : `${fmtDur(t.startedAt, t.completedAt)} · ${
+          t.usage ? `${fmtNum(t.usage.output_tokens)} out` : '—'
+        } · ${fmtTime(t.completedAt ?? t.updatedAt)}`;
+    const metaEl = el('div', 'wline dim progress-text', meta);
+    metaEl.title = meta;
+    card.append(metaEl);
   } else {
     card.append(el('div', 'wline dim', 'no tasks yet'));
   }
@@ -199,39 +208,17 @@ function render(): void {
   if (errs) strip.append(el('span', 'stat stat-err', `${errs} error`));
   if (liveTasks.length) strip.append(el('span', 'stat stat-busy', `${liveTasks.length} running`));
   if (totalOut) strip.append(el('span', 'stat', `Σ ${fmtNum(totalOut)} out`));
-  if (snapshot.hiddenWorkerCount > 0) {
-    const toggle = el(
-      'button',
-      'stat stat-btn',
-      scope === 'session'
-        ? `+${snapshot.hiddenWorkerCount} other-session · show`
-        : `hide ${snapshot.hiddenWorkerCount} other-session`,
-    );
-    toggle.onclick = () => {
-      scope = scope === 'session' ? 'all' : 'session';
-      void refreshOnce();
-    };
-    strip.append(toggle);
-  }
   root.append(strip);
 
-  // Workers first — the primary monitoring target.
+  // Workers first — the primary monitoring target; active workers lead.
   root.append(el('h2', undefined, 'Workers'));
   if (snapshot.workers.length === 0) {
-    root.append(
-      el(
-        'div',
-        'empty',
-        scope === 'session'
-          ? 'no workers this session' +
-              (snapshot.hiddenWorkerCount > 0
-                ? ` — ${snapshot.hiddenWorkerCount} from other sessions hidden`
-                : '')
-          : 'no managed workers',
-      ),
-    );
+    root.append(el('div', 'empty', 'no workers this session'));
   } else {
-    for (const w of snapshot.workers) root.append(workerCard(w));
+    const ordered = [...snapshot.workers].sort(
+      (a, b) => Number(Boolean(b.activeTaskId)) - Number(Boolean(a.activeTaskId)),
+    );
+    for (const w of ordered) root.append(workerCard(w));
   }
 
   // Live section — only rendered while something is in flight.
@@ -271,10 +258,7 @@ async function refreshOnce(): Promise<void> {
   if (inflight) return;
   inflight = true;
   try {
-    const result = await app.callServerTool({
-      name: 'get_board_snapshot',
-      arguments: { scope },
-    });
+    const result = await app.callServerTool({ name: 'get_board_snapshot', arguments: {} });
     if (result.isError) {
       lastError = `get_board_snapshot failed: ${JSON.stringify(result.content).slice(0, 200)}`;
     } else {
