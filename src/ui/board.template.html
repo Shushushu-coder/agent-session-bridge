@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Worker Board</title>
+<style>
+:root {
+  --bg: #ffffff; --fg: #1a1d21; --muted: #6b7280; --border: #e5e7eb;
+  --chip: #f3f4f6; --accent: #2563eb; --header: #fafafa;
+  --c-ready: #16a34a; --c-busy: #2563eb; --c-init: #d97706;
+  --c-err: #dc2626; --c-idle: #6b7280;
+}
+:root[data-theme="dark"] {
+  --bg: #0f1115; --fg: #e5e7eb; --muted: #9ca3af; --border: #262a33;
+  --chip: #1c2028; --header: #14171d;
+  --c-ready: #4ade80; --c-busy: #60a5fa; --c-init: #fbbf24;
+  --c-err: #f87171; --c-idle: #9ca3af;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1115; --fg: #e5e7eb; --muted: #9ca3af; --border: #262a33;
+    --chip: #1c2028; --header: #14171d;
+    --c-ready: #4ade80; --c-busy: #60a5fa; --c-init: #fbbf24;
+    --c-err: #f87171; --c-idle: #9ca3af;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 10px 12px; background: var(--bg); color: var(--fg);
+  font: 12px/1.45 -apple-system, "Segoe UI", system-ui, sans-serif;
+}
+.topbar {
+  display: flex; align-items: center; gap: 8px;
+  padding-bottom: 8px; border-bottom: 1px solid var(--border);
+}
+.topbar h1 { font-size: 13px; margin: 0; font-weight: 600; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--c-idle); flex: none; }
+.dot.ok { background: var(--c-ready); }
+.dot.err { background: var(--c-err); }
+.grow { flex: 1; }
+button {
+  font: inherit; color: var(--fg); background: var(--chip);
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 2px 8px; cursor: pointer;
+}
+button:hover { border-color: var(--accent); }
+.meta { color: var(--muted); font-size: 11px; }
+.err-banner {
+  margin: 8px 0; padding: 6px 8px; border: 1px solid var(--c-err);
+  border-radius: 6px; color: var(--c-err); display: none;
+}
+h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 14px 0 6px; }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { color: var(--muted); font-weight: 500; font-size: 11px; }
+tr:hover td { background: var(--header); }
+.chip {
+  display: inline-block; padding: 1px 7px; border-radius: 999px;
+  font-size: 11px; white-space: nowrap; background: var(--chip);
+  border: 1px solid var(--border);
+}
+.chip.st-ready { color: var(--c-ready); border-color: var(--c-ready); }
+.chip.st-busy, .chip.st-running, .chip.st-accepted, .chip.st-initializing {
+  color: var(--c-busy); border-color: var(--c-busy);
+}
+.chip.st-error, .chip.st-failed, .chip.st-unknown { color: var(--c-err); border-color: var(--c-err); }
+.chip.st-initialization_uncertain, .chip.st-pending_initialization { color: var(--c-init); border-color: var(--c-init); }
+.chip.st-completed { color: var(--c-ready); border-color: var(--c-ready); }
+.mono { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 11px; }
+.dim { color: var(--muted); }
+.bar { display: flex; height: 6px; border-radius: 3px; overflow: hidden; background: var(--chip); margin-top: 4px; min-width: 80px; }
+.bar > span { display: block; height: 100%; }
+.bar .b-completed { background: var(--c-ready); }
+.bar .b-running { background: var(--c-busy); }
+.bar .b-failed { background: var(--c-err); }
+.bar .b-unknown { background: var(--c-init); }
+.bar .b-accepted { background: var(--c-idle); }
+.foot { margin-top: 12px; color: var(--muted); font-size: 11px; display: flex; gap: 10px; }
+.empty { color: var(--muted); padding: 10px 0; }
+.progress-text { max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+</style>
+</head>
+<body>
+<div id="app">connecting…</div>
+<script>/*__APP__*/</script>
+</body>
+</html>

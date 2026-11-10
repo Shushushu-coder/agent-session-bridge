@@ -57,6 +57,28 @@ registry pruning.
 - Per-worker FIFO task queues, completion notifications.
 - Registry pruning and retention policy.
 
+## INIT-06 — In-app worker board (done)
+
+- `get_board_snapshot`: bounded one-call aggregate (workers × latest task
+  × cumulative usage, recent tasks, recent batches) for dashboards and
+  quick status reads.
+- `open_worker_board` MCP App tool + bundled HTML resource
+  (`ui://agent-session-bridge/worker-board`,
+  `text/html;profile=mcp-app`): self-refreshing status board rendered
+  inline by hosts with MCP Apps support, expandable to the right-side
+  panel via `ui/request-display-mode`; text snapshot fallback elsewhere.
+- `src/ui/` app (vanilla DOM over `@modelcontextprotocol/ext-apps`),
+  esbuild-bundled into a generated TS module via `scripts/build-ui.mjs`;
+  separate `tsconfig.ui.json` keeps DOM types out of the Node program.
+- Live observer CLI (`bridge watch`) from the previous slice shipped
+  alongside: `npm run watch` board + `--follow` rollout tail.
+- Model intent surface: `effectiveModel`/`modelSource` on workers,
+  `requestedModel` on tasks, `resumeHint` on idle workers,
+  `AGENT_SESSION_BRIDGE_MODEL` bridge default.
+
+Not in this slice: task cancellation, queues, DAG dependencies,
+writable workers, registry pruning.
+
 ## Phase 2 — Additional runtimes
 
 - Claude Code adapter, Gemini adapter behind the same `AgentRuntimeAdapter`

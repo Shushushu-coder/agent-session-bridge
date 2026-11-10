@@ -1,6 +1,12 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import type { BatchTaskEntry, BatchTaskInput, TaskBatch } from '../contracts/batch.js';
 import { DEFAULT_MAX_BATCH_TASKS, MAX_BATCH_RESPONSE_CHARS } from '../contracts/batch.js';
+import type {
+  BoardBatchSummary,
+  BoardSnapshot,
+  BoardTaskSummary,
+  BoardWorkerView,
+} from '../contracts/board.js';
 import type { AgentRuntimeAdapter, RuntimeStreamEvent } from '../contracts/runtime.js';
 import type {
   AgentTask,
@@ -185,6 +191,9 @@ export interface BatchResultsView {
   usageTotals: TaskUsage | null;
   tasks: BatchTaskResultView[];
 }
+
+const BOARD_RECENT_TASKS = 12;
+const BOARD_RECENT_BATCHES = 8;
 
 const LIVE_TASK: readonly TaskStatus[] = ['accepted', 'running'];
 
@@ -684,6 +693,87 @@ export class WorkerManager {
       allCompleted: dispatchedCount > 0 && resultCounts.completed === dispatchedCount,
       usageTotals,
       tasks,
+    };
+  }
+
+  /**
+   * One-call, bounded aggregate for the in-app worker board (and for main
+   * sessions that want a single status read): every worker with task
+   * count, in-flight task id, cumulative usage, and latest task summary,
+   * plus the newest tasks and batches. Read-only; carries no prompt or
+   * response payloads.
+   */
+  getBoardSnapshot(): BoardSnapshot {
+    const tasks = this.taskStore.list();
+    const byWorker = new Map<
+      string,
+      { count: number; activeId: string | null; usage: TaskUsage | null; latest: WorkerTask }
+    >();
+    for (const task of tasks) {
+      let acc = byWorker.get(task.workerId);
+      if (!acc) {
+        acc = { count: 0, activeId: null, usage: null, latest: task };
+        byWorker.set(task.workerId, acc);
+      }
+      acc.count += 1;
+      acc.latest = task; // store order is append-only by creation
+      if (LIVE_TASK.includes(task.status)) acc.activeId = task.taskId;
+      if (task.usage) acc.usage = acc.usage ? addUsage(acc.usage, task.usage) : { ...task.usage };
+    }
+    const workers = this.listWorkers().map((view): BoardWorkerView => {
+      const acc = byWorker.get(view.workerId);
+      return {
+        ...view,
+        taskCount: acc?.count ?? 0,
+        activeTaskId: acc?.activeId ?? null,
+        usageTotals: acc?.usage ?? null,
+        latestTask: acc ? this.taskSummary(acc.latest) : null,
+      };
+    });
+    const recentBatches = this.taskStore
+      .listBatches()
+      .slice(-BOARD_RECENT_BATCHES)
+      .map((batch): BoardBatchSummary => {
+        const status = this.getBatchStatus(batch.batchId);
+        return {
+          batchId: batch.batchId,
+          requestKey: batch.requestKey,
+          createdAt: batch.createdAt,
+          dispatchedCount: status.dispatchedCount,
+          rejectedCount: status.rejectedCount,
+          statusCounts: status.statusCounts,
+          allSettled: status.allSettled,
+          allCompleted: status.allCompleted,
+        };
+      })
+      .reverse();
+    return {
+      generatedAt: new Date().toISOString(),
+      runtimeConnected: this.options.adapter.isConnected(),
+      workerCount: workers.length,
+      workers,
+      recentTasks: tasks
+        .slice(-BOARD_RECENT_TASKS)
+        .map((task) => this.taskSummary(task))
+        .reverse(),
+      recentBatches,
+    };
+  }
+
+  private taskSummary(task: WorkerTask): BoardTaskSummary {
+    return {
+      taskId: task.taskId,
+      requestKey: task.requestKey,
+      status: task.status,
+      createdAt: task.createdAt,
+      updatedAt: task.updatedAt,
+      startedAt: task.startedAt,
+      completedAt: task.completedAt,
+      progressCount: task.progress.length,
+      lastProgress: task.progress[task.progress.length - 1] ?? null,
+      usage: task.usage,
+      errorCategory: task.error?.category ?? null,
+      errorMessage: task.error?.message ?? null,
     };
   }
 

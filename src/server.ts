@@ -1,13 +1,20 @@
 import { McpServer } from '@modelcontextprotocol/server';
+import {
+  registerAppResource,
+  registerAppTool,
+  RESOURCE_MIME_TYPE,
+} from '@modelcontextprotocol/ext-apps/server';
 import { z } from 'zod';
 import type { AgentRuntimeAdapter } from './contracts/runtime.js';
 import type { SendMessageResult, WorkerView } from './contracts/worker.js';
 import type { SessionRegistry } from './storage/sessionRegistry.js';
+import { BOARD_HTML } from './ui/boardHtml.generated.js';
 import { WorkerManager, WorkerToolError } from './workers/workerManager.js';
 
 export const BRIDGE_NAME = 'agent-session-bridge';
-export const BRIDGE_VERSION = '0.3.0';
+export const BRIDGE_VERSION = '0.4.0';
 export const BRIDGE_RUNTIME = 'codex';
+export const BOARD_RESOURCE_URI = 'ui://agent-session-bridge/worker-board';
 
 export interface BridgeDeps {
   manager: WorkerManager;
@@ -293,11 +300,61 @@ const batchResultsOutputSchema = z.object({
   tasks: z.array(batchTaskResultViewSchema),
 });
 
+const boardTaskSummarySchema = z.object({
+  taskId: z.string(),
+  requestKey: z.string(),
+  status: taskStatusSchema,
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  startedAt: z.string().nullable(),
+  completedAt: z.string().nullable(),
+  progressCount: z.number(),
+  lastProgress: progressEntrySchema.nullable(),
+  usage: usageOutputSchema.nullable(),
+  errorCategory: z.string().nullable(),
+  errorMessage: z.string().nullable(),
+});
+
+const boardWorkerViewSchema = workerViewSchema.extend({
+  taskCount: z.number(),
+  activeTaskId: z.string().nullable(),
+  usageTotals: usageOutputSchema.nullable(),
+  latestTask: boardTaskSummarySchema.nullable(),
+});
+
+const boardBatchSummarySchema = z.object({
+  batchId: z.string(),
+  requestKey: z.string(),
+  createdAt: z.string(),
+  dispatchedCount: z.number(),
+  rejectedCount: z.number(),
+  statusCounts: z.object({
+    accepted: z.number(),
+    running: z.number(),
+    completed: z.number(),
+    failed: z.number(),
+    unknown: z.number(),
+  }),
+  allSettled: z.boolean(),
+  allCompleted: z.boolean(),
+});
+
+const boardSnapshotSchema = z.object({
+  generatedAt: z.string(),
+  runtimeConnected: z.boolean(),
+  workerCount: z.number(),
+  workers: z.array(boardWorkerViewSchema),
+  recentTasks: z.array(boardTaskSummarySchema),
+  recentBatches: z.array(boardBatchSummarySchema),
+});
+
 /**
  * Creates the MCP server. Keeps the INIT-02 tools plus the INIT-03
  * asynchronous task tools (`dispatch_worker_task`, `get_task_status`,
- * `get_task_result`) and the INIT-04 multi-worker batch tools
- * (`dispatch_worker_batch`, `get_batch_status`, `get_batch_results`).
+ * `get_task_result`), the INIT-04 multi-worker batch tools
+ * (`dispatch_worker_batch`, `get_batch_status`, `get_batch_results`),
+ * and the INIT-06 board tools (`get_board_snapshot`, `open_worker_board`
+ * with its MCP App HTML resource).
  */
 export function createServer(deps: BridgeDeps): McpServer {
   const server = new McpServer({ name: BRIDGE_NAME, version: BRIDGE_VERSION });
@@ -530,6 +587,56 @@ export function createServer(deps: BridgeDeps): McpServer {
         return toolError(error);
       }
     },
+  );
+
+  server.registerTool(
+    'get_board_snapshot',
+    {
+      title: 'Get Board Snapshot',
+      description:
+        'Returns a bounded, one-call aggregate of bridge state for dashboards: ' +
+        'every worker with task count, in-flight task id, cumulative token usage, ' +
+        'and latest task summary, plus the newest tasks and batches. Read-only — ' +
+        'no prompt or response payloads.',
+      outputSchema: boardSnapshotSchema,
+    },
+    async () => ok(deps.manager.getBoardSnapshot()),
+  );
+
+  registerAppTool(
+    server,
+    'open_worker_board',
+    {
+      title: 'Open Worker Board',
+      description:
+        'Opens the live worker status board in hosts that render MCP Apps ' +
+        '(e.g. Codex Desktop): a self-refreshing table of worker state, ' +
+        'latest task progress, token usage, and recent batches that can ' +
+        'expand into a full side panel. On hosts without app rendering ' +
+        'this call returns the same snapshot as plain data.',
+      outputSchema: boardSnapshotSchema,
+      _meta: {
+        ui: { resourceUri: BOARD_RESOURCE_URI },
+        'openai/ui': { entrypoints: [{ type: 'global' }] },
+      },
+    },
+    async () => ok(deps.manager.getBoardSnapshot()),
+  );
+
+  registerAppResource(
+    server,
+    'worker-board',
+    BOARD_RESOURCE_URI,
+    {},
+    async () => ({
+      contents: [
+        {
+          uri: BOARD_RESOURCE_URI,
+          mimeType: RESOURCE_MIME_TYPE,
+          text: BOARD_HTML,
+        },
+      ],
+    }),
   );
 
   return server;

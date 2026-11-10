@@ -33,10 +33,12 @@ describe('worker MCP tools', () => {
       'dispatch_worker_task',
       'get_batch_results',
       'get_batch_status',
+      'get_board_snapshot',
       'get_task_result',
       'get_task_status',
       'get_worker',
       'list_workers',
+      'open_worker_board',
       'send_worker_message',
     ]);
   });

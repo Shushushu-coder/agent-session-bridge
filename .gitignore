@@ -5,6 +5,9 @@ node_modules/
 dist/
 *.tsbuildinfo
 
+# Generated UI resource (npm run build:ui regenerates it)
+src/ui/boardHtml.generated.ts
+
 # Test / coverage output
 coverage/
 

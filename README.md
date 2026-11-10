@@ -5,10 +5,11 @@ message, and resume **persistent Codex worker sessions** through standard
 MCP tools. Built on the MCP TypeScript SDK v2 over stdio and the official
 `@openai/codex-sdk`.
 
-**Status: INIT-04.** Persistent Codex workers and asynchronous task dispatch
-remain; a main session can now also dispatch one task per worker in a single
-idempotent **batch** call, poll the batch's aggregate status, and read every
-member's stored result in one read — including after a server restart.
+**Status: INIT-06.** Persistent Codex workers, asynchronous task dispatch,
+and idempotent multi-worker batches remain; the bridge can now also render a
+live worker **status board inside Codex** as an MCP App panel
+(`open_worker_board`), backed by the one-call `get_board_snapshot`
+aggregate.
 
 ## Currently implemented
 
@@ -47,6 +48,8 @@ member's stored result in one read — including after a server restart.
 | `dispatch_worker_batch` | Dispatch one task per worker at once; returns `batchId` + per-member outcome immediately |
 | `get_batch_status`    | Aggregate live status of every task in a batch                    |
 | `get_batch_results`   | Read every member's reply/usage/error in one call (truncated per member) |
+| `get_board_snapshot`  | One-call bounded aggregate: workers + latest tasks + usage + recent batches |
+| `open_worker_board`   | Opens the live worker board as an MCP App panel (text snapshot on hosts without app rendering) |
 
 `send_worker_message` is synchronous. It returns
 `status: "completed" | "failed" | "busy"` only after the turn finishes, and
@@ -192,10 +195,11 @@ npm install
 
 | Command              | Purpose                                       |
 | -------------------- | --------------------------------------------- |
-| `npm run dev`        | Run the server from source via `tsx`          |
-| `npm run build`      | Compile TypeScript to `dist/`                 |
-| `npm run typecheck`  | Strict `tsc --noEmit` over `src/` + `tests/`  |
-| `npm run test`       | All vitest tests (unit + E2E + smoke)         |
+| `npm run dev`        | Build the UI resource, then run the server via `tsx` |
+| `npm run build`      | Build the UI resource, then compile TypeScript to `dist/` |
+| `npm run build:ui`   | Bundle `src/ui/app.ts` into the board HTML module |
+| `npm run typecheck`  | Strict `tsc --noEmit` over `src/` + `tests/` + the UI app |
+| `npm run test`       | Build the UI resource, then all vitest tests    |
 | `npm run smoke`      | Build, then run the real-stdio smoke test     |
 | `npm run watch`      | Live worker observer (status board)           |
 | `npm start`          | Run the built server (`node dist/index.js`)   |
@@ -225,6 +229,34 @@ It only reads bridge data files and Codex rollout files: no writes, no
 process control, no Desktop interaction. Note that `--follow` displays
 the prompts workers actually received (the bridge itself never stores
 them); credential-shaped text is redacted on display.
+
+## Watching workers inside Codex (`open_worker_board`)
+
+`bridge watch` covers terminals; `open_worker_board` covers the Codex
+window itself. It is an **MCP App** tool: on hosts that render MCP Apps
+(Codex Desktop builds with app support) the tool result carries a
+`ui.resourceUri` pointing at a bundled HTML view the host renders inline
+in the conversation — and it can expand into the right-side full panel
+via `ui/request-display-mode`.
+
+The board refreshes itself by calling `get_board_snapshot` through the
+host's tool bridge (~1.5 s): worker state chips, latest task status with
+its last progress summary, token usage, cumulative per-worker totals,
+and recent batch progress bars. It never renders prompt or response
+text. `get_board_snapshot` is also a plain tool — a main session can
+call it directly for the same data, and `open_worker_board` falls back
+to the same JSON snapshot on hosts without app rendering.
+
+```toml
+# ~/.codex/config.toml — only needed on builds where Apps are not default
+[features]
+apps = true
+```
+
+The HTML view is generated from `src/ui/` (`npm run build:ui`, chained
+into `dev`/`build`/`test`/`typecheck`) and served as the
+`text/html;profile=mcp-app` resource
+`ui://agent-session-bridge/worker-board`.
 
 All tests are offline: no real Codex model call is ever made. The
 `codex exec` path is exercised against a fake compiled binary
@@ -278,6 +310,8 @@ src/runtime/codex/       CodexRuntimeAdapter over @openai/codex-sdk
 src/storage/             SessionRegistry and TaskStore (atomic JSON files)
 src/workers/             WorkerManager + git workspace verifier
 src/watch/               bridge watch — read-only live observer (board + rollout tail)
+src/ui/                  MCP App board: template + app source (build:ui → generated module)
+scripts/                 build-ui.mjs — esbuild bundler for the board resource
 tests/                   unit + fake-CLI E2E + stdio smoke tests
 tests/fixtures/          FakeCodex.cs — offline codex exec stand-in
 docs/                    architecture.md, roadmap.md
