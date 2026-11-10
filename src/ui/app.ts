@@ -9,8 +9,15 @@ import type {
 const POLL_MS = 1500;
 const HISTORY_LIMIT = 8;
 const LIVE_STATUSES = new Set(['accepted', 'running']);
+const BAR_CLASS: Record<string, string> = {
+  accepted: 'indet idle',
+  running: 'indet',
+  completed: 'done',
+  failed: 'fail',
+  unknown: 'unk',
+};
 const root = document.getElementById('app')!;
-const app = new App({ name: 'agent-session-bridge-board', version: '0.6.0' });
+const app = new App({ name: 'agent-session-bridge-board', version: '0.7.0' });
 
 let timer: ReturnType<typeof setInterval> | null = null;
 let lastError: string | null = null;
@@ -76,6 +83,118 @@ function modelOf(w: BoardWorkerView): string {
   return w.modelSource === 'runtime_default' ? 'runtime default' : '—';
 }
 
+function show(node: HTMLElement, on: boolean): void {
+  node.style.display = on ? '' : 'none';
+}
+
+/* ------------------------------------------------------------------ */
+/* Worker cards: built once per workerId, updated in place so the      */
+/* progress-bar animation is not restarted by every poll.              */
+/* ------------------------------------------------------------------ */
+
+interface CardRefs {
+  root: HTMLElement;
+  dot: HTMLElement;
+  nameEl: HTMLElement;
+  stateEl: HTMLElement;
+  modelEl: HTMLElement;
+  taskRow: HTMLElement;
+  taskStatus: HTMLElement;
+  taskLabel: HTMLElement;
+  barWrap: HTMLElement;
+  barFill: HTMLElement;
+  meta: HTMLElement;
+  noTask: HTMLElement;
+  errEl: HTMLElement;
+}
+
+const workerCards = new Map<string, CardRefs>();
+
+function makeCard(): CardRefs {
+  const card = el('div', 'wcard');
+  const top = el('div', 'wtop');
+  const left = el('div', 'wleft');
+  const dot = el('span', 'sdot');
+  const nameEl = el('span', 'wname');
+  left.append(dot, nameEl);
+  const stateEl = el('span', 'chip');
+  top.append(left, stateEl);
+
+  const modelRow = el('div', 'wline');
+  const modelEl = el('span', 'badge');
+  modelRow.append(modelEl);
+
+  const taskRow = el('div', 'wline task');
+  const taskStatus = el('span', 'chip');
+  const taskLabel = el('span', 'tasklabel');
+  taskRow.append(taskStatus, taskLabel);
+
+  const barWrap = el('div', 'progressbar');
+  const barFill = el('span', 'barfill');
+  barWrap.append(barFill);
+
+  const meta = el('div', 'wline dim progress-text');
+  const noTask = el('div', 'wline dim', 'no tasks yet');
+  const errEl = el('div', 'wline err-text');
+  errEl.style.display = 'none';
+
+  card.append(top, modelRow, taskRow, barWrap, meta, noTask, errEl);
+  return {
+    root: card,
+    dot,
+    nameEl,
+    stateEl,
+    modelEl,
+    taskRow,
+    taskStatus,
+    taskLabel,
+    barWrap,
+    barFill,
+    meta,
+    noTask,
+    errEl,
+  };
+}
+
+function syncCard(refs: CardRefs, w: BoardWorkerView): void {
+  refs.root.className = `wcard st-${w.state}`;
+  refs.dot.className = `sdot st-${w.state}`;
+  refs.nameEl.textContent = w.name;
+  refs.stateEl.className = `chip st-${w.state}`;
+  refs.stateEl.textContent = w.state;
+  const model = modelOf(w);
+  refs.modelEl.textContent = model;
+  refs.modelEl.title = model;
+
+  const t = w.latestTask;
+  show(refs.noTask, !t);
+  show(refs.taskRow, Boolean(t));
+  show(refs.barWrap, Boolean(t));
+  show(refs.meta, Boolean(t));
+  if (t) {
+    refs.taskStatus.className = `chip st-${t.status}`;
+    refs.taskStatus.textContent = t.status;
+    const label = t.label ?? t.lastProgress?.summary ?? '';
+    refs.taskLabel.textContent = label;
+    refs.taskLabel.title = label;
+    refs.barFill.className = `barfill ${BAR_CLASS[t.status] ?? 'indet'}`;
+    const meta = LIVE_STATUSES.has(t.status)
+      ? `${fmtDur(t.startedAt ?? t.createdAt)} · ${t.progressCount} events` +
+        (t.lastProgress?.summary ? ` — ${t.lastProgress.summary}` : '')
+      : `${fmtDur(t.startedAt, t.completedAt)} · ${
+          t.usage ? `${fmtNum(t.usage.output_tokens)} out` : '—'
+        } · ${fmtTime(t.completedAt ?? t.updatedAt)}`;
+    refs.meta.textContent = meta;
+    refs.meta.title = meta;
+  }
+  show(refs.errEl, Boolean(w.lastError));
+  if (w.lastError) refs.errEl.textContent = w.lastError.slice(0, 120);
+}
+
+/* ------------------------------------------------------------------ */
+/* Rebuilt rows (no animation state to preserve).                      */
+/* ------------------------------------------------------------------ */
+
 function batchLine(b: BoardBatchSummary): HTMLElement {
   const row = el('div', 'taskline');
   row.append(el('span', 'wname', b.requestKey));
@@ -97,63 +216,37 @@ function batchLine(b: BoardBatchSummary): HTMLElement {
     seg.style.width = `${(n / total) * 100}%`;
     bar.append(seg);
   }
-  const wrap = el('div', 'batch-wrap');
+  const wrap = el('div', 'batchcard');
   wrap.append(row, bar);
   return wrap;
 }
 
-function taskLine(t: BoardTaskSummary, nameOf: (id: string) => string, live: boolean): HTMLElement {
-  const row = el('div', `taskline${live ? ' live' : ''}`);
-  row.append(el('span', live ? 'wname' : 'dim', nameOf(t.workerId)));
+function taskLine(t: BoardTaskSummary, nameOf: (id: string) => string): HTMLElement {
+  const row = el('div', 'taskline');
+  row.append(el('span', 'dim', nameOf(t.workerId)));
   row.append(chip(t.status));
-  const detail = live ? (t.lastProgress?.summary ?? t.label ?? '') : (t.label ?? '');
+  const detail = t.label ?? t.lastProgress?.summary ?? '';
   const p = el('span', 'dim progress-text grow2', detail);
   p.title = detail;
   row.append(p);
-  const timing = live
-    ? fmtDur(t.startedAt ?? t.createdAt)
-    : `${fmtDur(t.startedAt, t.completedAt)} · ${fmtNum(t.usage?.output_tokens ?? 0)} out · ${fmtTime(t.completedAt ?? t.updatedAt)}`;
-  row.append(el('span', 'dim mono', timing));
+  row.append(
+    el(
+      'span',
+      'dim mono',
+      `${fmtDur(t.startedAt, t.completedAt)} · ${fmtNum(t.usage?.output_tokens ?? 0)} out · ${fmtTime(t.completedAt ?? t.updatedAt)}`,
+    ),
+  );
   return row;
 }
 
-function workerCard(w: BoardWorkerView): HTMLElement {
-  const card = el('div', `wcard st-${w.state}`);
-  const top = el('div', 'wtop');
-  top.append(el('span', 'wname', w.name), chip(w.state));
-  card.append(top);
-
-  // Model line — what this worker will request on its next turn.
-  const model = el('div', 'wline dim mono model-line', modelOf(w));
-  model.title = modelOf(w);
-  card.append(model);
-
-  const t = w.latestTask;
-  if (t) {
-    // What it's doing: status + the task's own label.
-    const line = el('div', 'wline');
-    line.append(chip(t.status));
-    const label = el('span', 'progress-text', t.label ?? t.lastProgress?.summary ?? '');
-    label.title = t.label ?? '';
-    line.append(label);
-    card.append(line);
-
-    // Progress meta: elapsed & event count live; duration & tokens settled.
-    const meta = LIVE_STATUSES.has(t.status)
-      ? `${fmtDur(t.startedAt ?? t.createdAt)} · ${t.progressCount} events` +
-        (t.lastProgress?.summary ? ` — ${t.lastProgress.summary}` : '')
-      : `${fmtDur(t.startedAt, t.completedAt)} · ${
-          t.usage ? `${fmtNum(t.usage.output_tokens)} out` : '—'
-        } · ${fmtTime(t.completedAt ?? t.updatedAt)}`;
-    const metaEl = el('div', 'wline dim progress-text', meta);
-    metaEl.title = meta;
-    card.append(metaEl);
-  } else {
-    card.append(el('div', 'wline dim', 'no tasks yet'));
-  }
-  if (w.lastError) card.append(el('div', 'wline err-text', w.lastError.slice(0, 120)));
-  return card;
+function kpi(label: string, value: string, tone?: 'blue' | 'red'): HTMLElement {
+  const tile = el('div', 'kpi');
+  tile.append(el('div', `kpi-num${tone ? ` ${tone}` : ''}`, value));
+  tile.append(el('div', 'kpi-label', label));
+  return tile;
 }
+
+/* ------------------------------------------------------------------ */
 
 function render(): void {
   root.replaceChildren();
@@ -191,41 +284,50 @@ function render(): void {
   const nameOf = (id: string): string =>
     snapshot!.workers.find((w) => w.workerId === id)?.name ?? id.slice(0, 14);
 
-  // Stat strip: worker health + live task count + cumulative output.
+  const liveTasks = snapshot.recentTasks.filter((t) => LIVE_STATUSES.has(t.status));
+  const openBatches = snapshot.recentBatches.filter((b) => !b.allSettled);
   const busy = snapshot.workers.filter((w) => w.state === 'busy').length;
   const errs = snapshot.workers.filter(
     (w) => w.state === 'error' || w.state === 'initialization_uncertain',
   ).length;
-  const liveTasks = snapshot.recentTasks.filter((t) => LIVE_STATUSES.has(t.status));
-  const openBatches = snapshot.recentBatches.filter((b) => !b.allSettled);
   const totalOut = snapshot.workers.reduce(
     (n, w) => n + (w.usageTotals?.output_tokens ?? 0),
     0,
   );
-  const strip = el('div', 'statstrip');
-  strip.append(el('span', 'stat', `${snapshot.workerCount} workers`));
-  if (busy) strip.append(el('span', 'stat stat-busy', `${busy} busy`));
-  if (errs) strip.append(el('span', 'stat stat-err', `${errs} error`));
-  if (liveTasks.length) strip.append(el('span', 'stat stat-busy', `${liveTasks.length} running`));
-  if (totalOut) strip.append(el('span', 'stat', `Σ ${fmtNum(totalOut)} out`));
-  root.append(strip);
 
-  // Workers first — the primary monitoring target; active workers lead.
+  // KPI tiles.
+  const kpis = el('div', 'kpis');
+  kpis.append(kpi('Workers', `${snapshot.workerCount}`));
+  kpis.append(kpi('Running', `${liveTasks.length}`, liveTasks.length ? 'blue' : undefined));
+  kpis.append(kpi('Errors', `${errs}`, errs ? 'red' : undefined));
+  kpis.append(kpi('Tokens out', fmtNum(totalOut)));
+  root.append(kpis);
+
+  // Live batch cards sit above the worker grid.
+  for (const b of openBatches) root.append(batchLine(b));
+
+  // Worker cards — active first; DOM nodes are reused per workerId.
   root.append(el('h2', undefined, 'Workers'));
   if (snapshot.workers.length === 0) {
     root.append(el('div', 'empty', 'no workers this session'));
   } else {
+    const grid = el('div', 'workers-grid');
     const ordered = [...snapshot.workers].sort(
       (a, b) => Number(Boolean(b.activeTaskId)) - Number(Boolean(a.activeTaskId)),
     );
-    for (const w of ordered) root.append(workerCard(w));
-  }
-
-  // Live section — only rendered while something is in flight.
-  if (liveTasks.length || openBatches.length) {
-    root.append(el('h2', 'live-h', 'Live'));
-    for (const t of liveTasks) root.append(taskLine(t, nameOf, true));
-    for (const b of openBatches) root.append(batchLine(b));
+    const seen = new Set<string>();
+    for (const w of ordered) {
+      let refs = workerCards.get(w.workerId);
+      if (!refs) {
+        refs = makeCard();
+        workerCards.set(w.workerId, refs);
+      }
+      syncCard(refs, w);
+      grid.append(refs.root);
+      seen.add(w.workerId);
+    }
+    for (const [id] of workerCards) if (!seen.has(id)) workerCards.delete(id);
+    root.append(grid);
   }
 
   // History — settled tasks, collapsed by default.
@@ -233,7 +335,7 @@ function render(): void {
   if (done.length) {
     const d = el('details');
     d.append(el('summary', undefined, `History · ${done.length} recent task(s)`));
-    for (const t of done.slice(0, HISTORY_LIMIT)) d.append(taskLine(t, nameOf, false));
+    for (const t of done.slice(0, HISTORY_LIMIT)) d.append(taskLine(t, nameOf));
     root.append(d);
   }
 
