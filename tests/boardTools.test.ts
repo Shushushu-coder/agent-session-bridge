@@ -1,6 +1,9 @@
 import { rm } from 'node:fs/promises';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { BOARD_RESOURCE_URI } from '../src/server.js';
+import { TaskStore } from '../src/storage/taskStore.js';
+import { WorkerManager } from '../src/workers/workerManager.js';
 import { createTestStack, type TestStack } from './helpers/mcp.js';
 import { FakeRuntimeAdapter } from './helpers/fakes.js';
 
@@ -28,9 +31,12 @@ async function makeWorker(stack: TestStack, name: string): Promise<string> {
 interface SnapshotBody {
   generatedAt: string;
   runtimeConnected: boolean;
+  scope: 'session' | 'all';
+  hiddenWorkerCount: number;
   workerCount: number;
   workers: {
     workerId: string;
+    sessionId: string | null;
     state: string;
     taskCount: number;
     activeTaskId: string | null;
@@ -59,8 +65,11 @@ describe('board MCP tools', () => {
     const empty = await stack.client.callTool({ name: 'get_board_snapshot', arguments: {} });
     const emptyBody = empty.structuredContent as SnapshotBody;
     expect(emptyBody.runtimeConnected).toBe(true);
+    expect(emptyBody.scope).toBe('session');
+    expect(emptyBody.hiddenWorkerCount).toBe(0);
     expect(emptyBody.workerCount).toBe(2);
     for (const w of emptyBody.workers) {
+      expect(w.sessionId).toBe(stack.deps.manager.sessionId);
       expect(w.taskCount).toBe(0);
       expect(w.activeTaskId).toBeNull();
       expect(w.latestTask).toBeNull();
@@ -110,6 +119,40 @@ describe('board MCP tools', () => {
       allCompleted: true,
     });
     expect(body.recentBatches[0]!.statusCounts.completed).toBe(2);
+  });
+
+  it('scopes the snapshot to workers of this server session', async () => {
+    const adapter = new FakeRuntimeAdapter();
+    const stack = await createTestStack(adapter);
+    stacks.push(stack);
+    const mine = await makeWorker(stack, 'mine');
+
+    // A worker registered by a *different* bridge session sharing the registry.
+    const foreign = new WorkerManager({
+      registry: stack.deps.registry,
+      taskStore: await TaskStore.open(join(stack.dataDir, 'tasks.json')),
+      adapter,
+      verifyWorkspace: async (p) => ({ ok: true, resolvedPath: p }),
+      sessionId: 'ses_foreign',
+    });
+    const other = (await foreign.createWorker({ name: 'other', workspacePath: 'E:\\ws-other' }))
+      .workerId;
+
+    const scoped = await stack.client.callTool({ name: 'get_board_snapshot', arguments: {} });
+    const body = scoped.structuredContent as SnapshotBody;
+    expect(body.scope).toBe('session');
+    expect(body.workers.map((w) => w.workerId)).toEqual([mine]);
+    expect(body.hiddenWorkerCount).toBe(1);
+
+    const all = await stack.client.callTool({
+      name: 'get_board_snapshot',
+      arguments: { scope: 'all' },
+    });
+    const allBody = all.structuredContent as SnapshotBody;
+    expect(allBody.scope).toBe('all');
+    expect(allBody.workerCount).toBe(2);
+    expect(new Set(allBody.workers.map((w) => w.workerId))).toEqual(new Set([mine, other]));
+    expect(allBody.hiddenWorkerCount).toBe(0);
   });
 
   it('reports the live task on a worker while a turn is in flight', async () => {

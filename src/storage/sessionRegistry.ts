@@ -22,6 +22,8 @@ const workerRecordSchema = z.object({
   threadId: z.string().min(1).nullable(),
   workspacePath: z.string().min(1),
   model: z.string().min(1).optional(),
+  // Optional so files written before session tagging existed still load.
+  sessionId: z.string().min(1).nullable().default(null),
   state: workerStateSchema,
   createdAt: z.string().min(1),
   updatedAt: z.string().min(1),

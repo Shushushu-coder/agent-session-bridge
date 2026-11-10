@@ -70,6 +70,7 @@ const workerViewSchema = z.object({
   effectiveModel: z.string().nullable(),
   modelSource: z.enum(['worker', 'bridge_default', 'runtime_default']),
   resumeHint: z.string().nullable(),
+  sessionId: z.string().nullable(),
   state: workerStateSchema,
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -302,6 +303,7 @@ const batchResultsOutputSchema = z.object({
 
 const boardTaskSummarySchema = z.object({
   taskId: z.string(),
+  workerId: z.string(),
   requestKey: z.string(),
   status: taskStatusSchema,
   createdAt: z.string(),
@@ -342,6 +344,8 @@ const boardBatchSummarySchema = z.object({
 const boardSnapshotSchema = z.object({
   generatedAt: z.string(),
   runtimeConnected: z.boolean(),
+  scope: z.enum(['session', 'all']),
+  hiddenWorkerCount: z.number(),
   workerCount: z.number(),
   workers: z.array(boardWorkerViewSchema),
   recentTasks: z.array(boardTaskSummarySchema),
@@ -597,10 +601,14 @@ export function createServer(deps: BridgeDeps): McpServer {
         'Returns a bounded, one-call aggregate of bridge state for dashboards: ' +
         'every worker with task count, in-flight task id, cumulative token usage, ' +
         'and latest task summary, plus the newest tasks and batches. Read-only — ' +
-        'no prompt or response payloads.',
+        'no prompt or response payloads. Defaults to scope "session" (only ' +
+        'workers created by this server); pass scope "all" for every worker.',
+      inputSchema: z.object({
+        scope: z.enum(['session', 'all']).optional(),
+      }),
       outputSchema: boardSnapshotSchema,
     },
-    async () => ok(deps.manager.getBoardSnapshot()),
+    async (args) => ok(deps.manager.getBoardSnapshot(args.scope ?? 'session')),
   );
 
   registerAppTool(
@@ -610,9 +618,9 @@ export function createServer(deps: BridgeDeps): McpServer {
       title: 'Open Worker Board',
       description:
         'Opens the live worker status board in hosts that render MCP Apps ' +
-        '(e.g. Codex Desktop): a self-refreshing table of worker state, ' +
-        'latest task progress, token usage, and recent batches that can ' +
-        'expand into a full side panel. On hosts without app rendering ' +
+        '(e.g. Codex Desktop): a self-refreshing view of this session\'s ' +
+        'workers — state, task progress, token usage, and batches — that ' +
+        'can expand into a full side panel. On hosts without app rendering ' +
         'this call returns the same snapshot as plain data.',
       outputSchema: boardSnapshotSchema,
       _meta: {

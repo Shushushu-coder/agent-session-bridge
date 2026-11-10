@@ -16,6 +16,7 @@ let timer: ReturnType<typeof setInterval> | null = null;
 let lastError: string | null = null;
 let snapshot: BoardSnapshot | null = null;
 let inflight = false;
+let scope: 'session' | 'all' = 'session';
 
 function el(tag: string, cls?: string, text?: string): HTMLElement {
   const node = document.createElement(tag);
@@ -198,12 +199,37 @@ function render(): void {
   if (errs) strip.append(el('span', 'stat stat-err', `${errs} error`));
   if (liveTasks.length) strip.append(el('span', 'stat stat-busy', `${liveTasks.length} running`));
   if (totalOut) strip.append(el('span', 'stat', `Σ ${fmtNum(totalOut)} out`));
+  if (snapshot.hiddenWorkerCount > 0) {
+    const toggle = el(
+      'button',
+      'stat stat-btn',
+      scope === 'session'
+        ? `+${snapshot.hiddenWorkerCount} other-session · show`
+        : `hide ${snapshot.hiddenWorkerCount} other-session`,
+    );
+    toggle.onclick = () => {
+      scope = scope === 'session' ? 'all' : 'session';
+      void refreshOnce();
+    };
+    strip.append(toggle);
+  }
   root.append(strip);
 
   // Workers first — the primary monitoring target.
   root.append(el('h2', undefined, 'Workers'));
   if (snapshot.workers.length === 0) {
-    root.append(el('div', 'empty', 'no managed workers'));
+    root.append(
+      el(
+        'div',
+        'empty',
+        scope === 'session'
+          ? 'no workers this session' +
+              (snapshot.hiddenWorkerCount > 0
+                ? ` — ${snapshot.hiddenWorkerCount} from other sessions hidden`
+                : '')
+          : 'no managed workers',
+      ),
+    );
   } else {
     for (const w of snapshot.workers) root.append(workerCard(w));
   }
@@ -245,7 +271,10 @@ async function refreshOnce(): Promise<void> {
   if (inflight) return;
   inflight = true;
   try {
-    const result = await app.callServerTool({ name: 'get_board_snapshot', arguments: {} });
+    const result = await app.callServerTool({
+      name: 'get_board_snapshot',
+      arguments: { scope },
+    });
     if (result.isError) {
       lastError = `get_board_snapshot failed: ${JSON.stringify(result.content).slice(0, 200)}`;
     } else {

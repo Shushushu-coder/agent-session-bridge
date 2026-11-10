@@ -20,6 +20,7 @@ function record(overrides: Partial<WorkerRecord> = {}): WorkerRecord {
     runtime: 'codex',
     threadId: null,
     workspacePath: 'E:\\ws',
+    sessionId: 'ses_test',
     state: 'pending_initialization',
     createdAt: now,
     updatedAt: now,

@@ -31,6 +31,12 @@ export interface WorkerRecord {
   threadId: string | null;
   workspacePath: string;
   model?: string | undefined;
+  /**
+   * Id of the bridge server session that registered this worker; null for
+   * records written before session tagging existed. Used for display
+   * scoping only — ownership is never enforced against other sessions.
+   */
+  sessionId: string | null;
   state: WorkerState;
   readonly createdAt: string;
   updatedAt: string;
@@ -70,6 +76,8 @@ export interface WorkerView {
    * concurrently.
    */
   resumeHint: string | null;
+  /** Bridge server session that created this worker; null for legacy records. */
+  sessionId: string | null;
   state: WorkerViewState;
   createdAt: string;
   updatedAt: string;

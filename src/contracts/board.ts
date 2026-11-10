@@ -28,6 +28,12 @@ export interface BoardWorkerView extends WorkerView {
   latestTask: BoardTaskSummary | null;
 }
 
+/**
+ * Snapshot visibility scope: `session` shows only workers created by this
+ * bridge server process; `all` shows every registered worker.
+ */
+export type BoardScope = 'session' | 'all';
+
 export interface BoardBatchSummary {
   batchId: string;
   requestKey: string;
@@ -42,6 +48,10 @@ export interface BoardBatchSummary {
 export interface BoardSnapshot {
   generatedAt: string;
   runtimeConnected: boolean;
+  /** Scope the snapshot was filtered to. */
+  scope: BoardScope;
+  /** Workers excluded by `scope: 'session'` (created by other bridge sessions or before session tagging). */
+  hiddenWorkerCount: number;
   workerCount: number;
   workers: BoardWorkerView[];
   recentTasks: BoardTaskSummary[];

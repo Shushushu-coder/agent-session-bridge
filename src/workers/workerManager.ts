@@ -3,6 +3,7 @@ import type { BatchTaskEntry, BatchTaskInput, TaskBatch } from '../contracts/bat
 import { DEFAULT_MAX_BATCH_TASKS, MAX_BATCH_RESPONSE_CHARS } from '../contracts/batch.js';
 import type {
   BoardBatchSummary,
+  BoardScope,
   BoardSnapshot,
   BoardTaskSummary,
   BoardWorkerView,
@@ -73,6 +74,12 @@ export interface WorkerManagerOptions {
   idGenerator?: () => string;
   /** Maximum tasks one batch may dispatch. Defaults to DEFAULT_MAX_BATCH_TASKS. */
   maxBatchTasks?: number;
+  /**
+   * Session tag stamped onto workers this process creates; board snapshots
+   * default to `scope: 'session'` so only this server's workers show.
+   * Defaults to a random per-process id.
+   */
+  sessionId?: string;
 }
 
 export interface DispatchTaskResult {
@@ -215,11 +222,14 @@ export class WorkerManager {
   private readonly taskStore: TaskStore;
   private readonly maxBatchTasks: number;
 
+  readonly sessionId: string;
+
   constructor(private readonly options: WorkerManagerOptions) {
     this.verifyWorkspace = options.verifyWorkspace ?? verifyGitWorkspace;
     this.idGenerator = options.idGenerator ?? defaultWorkerId;
     this.taskStore = options.taskStore;
     this.maxBatchTasks = Math.max(1, options.maxBatchTasks ?? DEFAULT_MAX_BATCH_TASKS);
+    this.sessionId = options.sessionId ?? defaultSessionId();
   }
 
   async createWorker(input: CreateWorkerInput): Promise<WorkerView> {
@@ -238,6 +248,7 @@ export class WorkerManager {
       threadId: null,
       workspacePath: check.resolvedPath,
       ...(input.model ? { model: input.model } : {}),
+      sessionId: this.sessionId,
       state: 'pending_initialization',
       createdAt: now,
       updatedAt: now,
@@ -702,8 +713,13 @@ export class WorkerManager {
    * count, in-flight task id, cumulative usage, and latest task summary,
    * plus the newest tasks and batches. Read-only; carries no prompt or
    * response payloads.
+   *
+   * `scope: 'session'` (default) filters to workers created by this server
+   * process — their tasks and batches only; workers from other bridge
+   * sessions (or pre-tagging records) are counted in `hiddenWorkerCount`.
+   * `scope: 'all'` returns the unfiltered view.
    */
-  getBoardSnapshot(): BoardSnapshot {
+  getBoardSnapshot(scope: BoardScope = 'session'): BoardSnapshot {
     const tasks = this.taskStore.list();
     const byWorker = new Map<
       string,
@@ -720,7 +736,7 @@ export class WorkerManager {
       if (LIVE_TASK.includes(task.status)) acc.activeId = task.taskId;
       if (task.usage) acc.usage = acc.usage ? addUsage(acc.usage, task.usage) : { ...task.usage };
     }
-    const workers = this.listWorkers().map((view): BoardWorkerView => {
+    const allWorkers = this.listWorkers().map((view): BoardWorkerView => {
       const acc = byWorker.get(view.workerId);
       return {
         ...view,
@@ -730,8 +746,16 @@ export class WorkerManager {
         latestTask: acc ? this.taskSummary(acc.latest) : null,
       };
     });
+    const workers =
+      scope === 'all' ? allWorkers : allWorkers.filter((w) => w.sessionId === this.sessionId);
+    const visible = new Set(workers.map((w) => w.workerId));
+    const visibleTasks =
+      scope === 'all' ? tasks : tasks.filter((task) => visible.has(task.workerId));
     const recentBatches = this.taskStore
       .listBatches()
+      .filter(
+        (batch) => scope === 'all' || batch.tasks.some((entry) => visible.has(entry.workerId)),
+      )
       .slice(-BOARD_RECENT_BATCHES)
       .map((batch): BoardBatchSummary => {
         const status = this.getBatchStatus(batch.batchId);
@@ -750,9 +774,11 @@ export class WorkerManager {
     return {
       generatedAt: new Date().toISOString(),
       runtimeConnected: this.options.adapter.isConnected(),
+      scope,
+      hiddenWorkerCount: allWorkers.length - workers.length,
       workerCount: workers.length,
       workers,
-      recentTasks: tasks
+      recentTasks: visibleTasks
         .slice(-BOARD_RECENT_TASKS)
         .map((task) => this.taskSummary(task))
         .reverse(),
@@ -1483,6 +1509,10 @@ export class WorkerManager {
 
 function defaultWorkerId(): string {
   return `wrk_${randomBytes(6).toString('hex')}`;
+}
+
+function defaultSessionId(): string {
+  return `ses_${randomBytes(6).toString('hex')}`;
 }
 
 function defaultTaskId(): string {
