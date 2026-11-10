@@ -28,6 +28,11 @@ export type RuntimeStreamEvent =
 
 export interface AgentRuntimeAdapter {
   readonly kind: RuntimeKind;
+  /**
+   * Bridge-level default model applied to sessions that don't pin one.
+   * Undefined means the runtime's own default applies.
+   */
+  readonly defaultModel?: string | undefined;
   isConnected(): boolean;
   connect(): Promise<void>;
   createSession(input?: CreateSessionInput): Promise<WorkerSession>;

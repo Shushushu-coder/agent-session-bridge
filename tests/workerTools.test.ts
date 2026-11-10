@@ -85,6 +85,9 @@ describe('worker MCP tools', () => {
       runtime: 'codex',
       state: 'pending_initialization',
       threadId: null,
+      effectiveModel: null,
+      modelSource: 'runtime_default',
+      resumeHint: null,
     });
     expect(worker.workerId).toMatch(/^wrk_/);
   });
@@ -153,6 +156,14 @@ describe('worker MCP tools', () => {
     // Registry file itself holds the durable mapping.
     const reloaded = await deps.registry.list();
     expect(reloaded[0]).toMatchObject({ threadId: 'thread_tool_1', state: 'ready' });
+
+    const got = await client.callTool({
+      name: 'get_worker',
+      arguments: { workerId: worker.workerId },
+    });
+    expect(got.structuredContent).toMatchObject({
+      worker: { resumeHint: 'codex resume thread_tool_1', state: 'ready' },
+    });
   });
 
   it('send_worker_message on unknown worker is a tool error', async () => {

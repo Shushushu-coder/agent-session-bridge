@@ -60,6 +60,9 @@ const workerViewSchema = z.object({
   threadId: z.string().nullable(),
   workspacePath: z.string(),
   model: z.string().optional(),
+  effectiveModel: z.string().nullable(),
+  modelSource: z.enum(['worker', 'bridge_default', 'runtime_default']),
+  resumeHint: z.string().nullable(),
   state: workerStateSchema,
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -176,6 +179,7 @@ const taskStatusOutputSchema = z.object({
   startedAt: z.string().nullable(),
   completedAt: z.string().nullable(),
   nativeThreadId: z.string().nullable(),
+  requestedModel: z.string().nullable(),
   progress: z.array(progressEntrySchema),
   errorCategory: z.string().nullable(),
   errorMessage: z.string().nullable(),
@@ -188,6 +192,7 @@ const taskResultOutputSchema = z.object({
   workerId: z.string(),
   status: z.enum(['completed', 'failed', 'unknown', 'NOT_READY']),
   nativeThreadId: z.string().nullable(),
+  requestedModel: z.string().nullable(),
   response: z.string().nullable(),
   usage: usageOutputSchema.nullable(),
   completedAt: z.string().nullable(),
@@ -217,6 +222,7 @@ const batchTaskViewSchema = z.object({
   dispatchStatus: z.enum(['accepted', 'rejected']),
   status: taskStatusSchema.nullable(),
   nativeThreadId: z.string().nullable(),
+  requestedModel: z.string().nullable(),
   errorCategory: z.string().nullable(),
   errorMessage: z.string().nullable(),
 });
@@ -256,6 +262,7 @@ const batchTaskResultViewSchema = z.object({
   dispatchStatus: z.enum(['accepted', 'rejected']),
   status: z.enum(['completed', 'failed', 'unknown', 'NOT_READY']).nullable(),
   nativeThreadId: z.string().nullable(),
+  requestedModel: z.string().nullable(),
   response: z.string().nullable(),
   responseLength: z.number(),
   truncated: z.boolean(),
@@ -336,7 +343,9 @@ export function createServer(deps: BridgeDeps): McpServer {
     'list_workers',
     {
       title: 'List Workers',
-      description: 'Lists all managed workers with identity, state, and native thread id.',
+      description:
+        'Lists all managed workers with identity, state, native thread id, ' +
+        'resolved effective model, and a codex resume hint when the worker is idle.',
       outputSchema: z.object({ workers: z.array(workerViewSchema) }),
     },
     async () => ok({ workers: deps.manager.listWorkers() }),
@@ -346,7 +355,10 @@ export function createServer(deps: BridgeDeps): McpServer {
     'get_worker',
     {
       title: 'Get Worker',
-      description: 'Returns the identity and current state of one managed worker.',
+      description:
+        'Returns the identity and current state of one managed worker, ' +
+        'including the resolved effective model (requested, not observed) ' +
+        'and a codex resume hint for its native thread when idle.',
       inputSchema: getWorkerInputSchema,
       outputSchema: z.object({ worker: workerViewSchema }),
     },

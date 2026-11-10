@@ -110,6 +110,8 @@ export interface FakeAdapterCall {
 export class FakeRuntimeAdapter implements AgentRuntimeAdapter {
   readonly kind = 'codex';
   connected = true;
+  /** Bridge-level default model; set in tests to cover bridge_default. */
+  defaultModel: string | undefined = undefined;
   calls: FakeAdapterCall[] = [];
   nextResults: TaskResult[] = [];
   runTaskImpl:

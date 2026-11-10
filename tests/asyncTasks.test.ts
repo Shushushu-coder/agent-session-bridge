@@ -302,6 +302,8 @@ describe('asynchronous worker tasks', () => {
       status: 'unknown',
       nativeThreadId: 'thread_from_task_only',
       association: 'unconfirmed',
+      // Seeded record predates requestedModel; loads as null.
+      requestedModel: null,
     });
     const result = next.getTaskResult('task_split');
     expect(result.status).toBe('unknown');
@@ -317,6 +319,61 @@ describe('asynchronous worker tasks', () => {
       code: 'STATE_BLOCKED',
     } satisfies Partial<WorkerToolError>);
     expect(nextAdapter.calls).toEqual([]);
+  });
+
+  it('records the model requested at dispatch on the task record', async () => {
+    adapter.defaultModel = 'bridge-fallback';
+    const pinned = await manager.createWorker({
+      name: 'p',
+      workspacePath: 'E:\\ws',
+      model: 'gpt-pinned',
+    });
+    const unpinned = await manager.createWorker({ name: 'f', workspacePath: 'E:\\ws2' });
+    const first = await manager.dispatchTask(pinned.workerId, 'a', 'key-pinned');
+    const second = await manager.dispatchTask(unpinned.workerId, 'b', 'key-free');
+    await manager.whenTaskSettled(first.taskId);
+    await manager.whenTaskSettled(second.taskId);
+
+    expect(manager.getTaskStatus(first.taskId).requestedModel).toBe('gpt-pinned');
+    expect(manager.getTaskResult(first.taskId).requestedModel).toBe('gpt-pinned');
+    expect(manager.getTaskStatus(second.taskId).requestedModel).toBe('bridge-fallback');
+
+    const persisted = taskStore.get(first.taskId);
+    expect(persisted?.requestedModel).toBe('gpt-pinned');
+  });
+
+  it('hides the resume hint while the worker is mid-turn', async () => {
+    adapter.nextResults.push({
+      taskId: '',
+      sessionId: '',
+      status: 'succeeded',
+      externalSessionId: 'thread_busy',
+      completedAt: new Date().toISOString(),
+    });
+    const worker = await manager.createWorker({ name: 'w', workspacePath: 'E:\\ws' });
+    await manager.sendMessage(worker.workerId, 'init');
+    expect(manager.getWorker(worker.workerId).resumeHint).toBe('codex resume thread_busy');
+
+    const gate = hold();
+    adapter.streamHold = gate.promise;
+    adapter.streamImpl = async function* () {
+      yield { type: 'thread.started', threadId: 'thread_busy' };
+      yield { type: 'item.completed', itemType: 'agent_message', text: 'done' };
+      yield { type: 'turn.completed', usage: null };
+    };
+    const dispatched = await manager.dispatchTask(worker.workerId, 'slow', 'req-busy');
+    await waitFor(
+      () => manager.getTaskStatus(dispatched.taskId).status === 'running',
+      'running',
+    );
+    expect(manager.getWorker(worker.workerId)).toMatchObject({
+      state: 'busy',
+      resumeHint: null,
+    });
+
+    gate.release();
+    await manager.whenTaskSettled(dispatched.taskId);
+    expect(manager.getWorker(worker.workerId).resumeHint).toBe('codex resume thread_busy');
   });
 
   it('does not let a late success overwrite a task abandoned on shutdown', async () => {

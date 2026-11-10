@@ -106,6 +106,23 @@ Errors that reject the call itself (`WORKER_NOT_FOUND`, `INVALID_WORKSPACE`,
 `isError` results with a machine-readable code. Per-member failures inside a
 batch are reported in `tasks[]`, not as call errors.
 
+### Model resolution and resume hints
+
+`list_workers` / `get_worker` report `effectiveModel` and `modelSource`:
+the model the next turn will request, resolved worker `model` →
+`AGENT_SESSION_BRIDGE_MODEL` → runtime default (`effectiveModel: null`
+with `modelSource: "runtime_default"` — the bridge does not know Codex's
+own default). Each task records the `requestedModel` it was dispatched
+with, so status/result views show what was asked for. These are
+requested values; the Codex runtime does not report which model actually
+ran.
+
+A worker with a persisted thread id also reports `resumeHint` — the
+local command (`codex resume <threadId>`) that re-attaches to its
+native thread from a terminal. It is `null` while no thread exists and
+while the worker is mid-turn, because a live thread must not be resumed
+concurrently.
+
 ### Task id and thread id
 
 `taskId` identifies one execution of one message. `threadId` is the Codex
@@ -180,7 +197,34 @@ npm install
 | `npm run typecheck`  | Strict `tsc --noEmit` over `src/` + `tests/`  |
 | `npm run test`       | All vitest tests (unit + E2E + smoke)         |
 | `npm run smoke`      | Build, then run the real-stdio smoke test     |
+| `npm run watch`      | Live worker observer (status board)           |
 | `npm start`          | Run the built server (`node dist/index.js`)   |
+
+## Watching workers live (`bridge watch`)
+
+A read-only terminal observer for managed workers — useful while Codex
+Desktop is busy and its sidebar cannot show externally created threads.
+
+```sh
+npm run watch                          # status board for all workers
+npm run watch -- --follow w-a          # live message stream of one worker
+npm run watch -- --follow wrk_cf96...  # workerId also works
+npm run watch -- --once                # print the board once and exit
+npm run watch -- --help                # all options (--dir, --codex-home, --interval, --lines)
+```
+
+The board polls `workers.json` + `tasks.json` (~500 ms) and shows per
+worker: state, thread id, model, latest task status, progress, reply,
+and token usage. `--follow` locates the worker's rollout file under
+`~/.codex/sessions/` (by `threadId`, re-scanned until it exists) and
+prints turn starts, user/agent messages, token counts, and turn
+completions as they are appended — event-level real time, not token
+deltas.
+
+It only reads bridge data files and Codex rollout files: no writes, no
+process control, no Desktop interaction. Note that `--follow` displays
+the prompts workers actually received (the bridge itself never stores
+them); credential-shaped text is redacted on display.
 
 All tests are offline: no real Codex model call is ever made. The
 `codex exec` path is exercised against a fake compiled binary
@@ -193,7 +237,7 @@ compiler is present.
 | ----------------------------------- | ---------------------------------------------- |
 | `AGENT_SESSION_BRIDGE_DATA_DIR`     | Data directory for `workers.json` and `tasks.json` (default `<repo>/sessions`) |
 | `AGENT_SESSION_BRIDGE_CODEX_PATH`   | Codex binary override (`codexPathOverride`)    |
-| `AGENT_SESSION_BRIDGE_MODEL`        | Default model for workers without one          |
+| `AGENT_SESSION_BRIDGE_MODEL`        | Bridge-level default model for workers without one (`modelSource: "bridge_default"`) |
 | `AGENT_SESSION_BRIDGE_MAX_BATCH_TASKS` | Max tasks a batch may dispatch (default 3)  |
 
 `sessions/` is gitignored. `workers.json` stores worker metadata.
@@ -217,6 +261,12 @@ command = "node"
 args = ["E:\\Projects\\agent-session-bridge\\dist\\index.js"]
 ```
 
+To reload the bridge after changing its code **without restarting Codex
+Desktop**: Codex watches `config.toml`, so toggling `enabled = false` →
+`enabled = true` under the `[mcp_servers.*]` entry respawns the server
+process. Killing the node process does NOT work — the stdio transport
+just stays closed.
+
 ## Project layout
 
 ```text
@@ -227,6 +277,7 @@ src/contracts/           session / task / batch / worker / runtime types
 src/runtime/codex/       CodexRuntimeAdapter over @openai/codex-sdk
 src/storage/             SessionRegistry and TaskStore (atomic JSON files)
 src/workers/             WorkerManager + git workspace verifier
+src/watch/               bridge watch — read-only live observer (board + rollout tail)
 tests/                   unit + fake-CLI E2E + stdio smoke tests
 tests/fixtures/          FakeCodex.cs — offline codex exec stand-in
 docs/                    architecture.md, roadmap.md

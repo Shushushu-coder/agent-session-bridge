@@ -41,6 +41,13 @@ export interface WorkerRecord {
 /** `busy` is never persisted; it is overlaid in memory by the manager. */
 export type WorkerViewState = WorkerState | 'busy';
 
+/**
+ * Where a worker's effective model comes from: the worker's own pinned
+ * `model`, the bridge-level adapter default, or the runtime's own
+ * default when neither is set.
+ */
+export type ModelSource = 'worker' | 'bridge_default' | 'runtime_default';
+
 export interface WorkerView {
   workerId: string;
   name: string;
@@ -48,6 +55,21 @@ export interface WorkerView {
   threadId: string | null;
   workspacePath: string;
   model?: string | undefined;
+  /**
+   * Model the next turn will request, resolved worker `model` → adapter
+   * default → `null`. `null` with `modelSource: 'runtime_default'` means
+   * the runtime picks; this records the request, not what the runtime
+   * actually ran (runtimes do not report that back).
+   */
+  effectiveModel: string | null;
+  modelSource: ModelSource;
+  /**
+   * Local command to re-attach to this worker's native thread
+   * (`codex resume <threadId>`), or null when no thread id exists yet or
+   * the worker is mid-turn — a live thread must not be resumed
+   * concurrently.
+   */
+  resumeHint: string | null;
   state: WorkerViewState;
   createdAt: string;
   updatedAt: string;

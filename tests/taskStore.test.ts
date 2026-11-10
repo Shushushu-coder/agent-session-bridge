@@ -29,6 +29,7 @@ function task(overrides: Partial<WorkerTask> = {}): WorkerTask {
     updatedAt: now,
     completedAt: now,
     nativeThreadId: 'thread_alpha',
+    requestedModel: null,
     progress: [{ at: now, kind: 'turn.completed', summary: 'turn completed' }],
     result: 'done',
     usage: {

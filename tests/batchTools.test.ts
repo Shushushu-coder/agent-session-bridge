@@ -89,6 +89,7 @@ describe('batch MCP tools', () => {
         response: string | null;
         truncated: boolean;
         nativeThreadId: string | null;
+        requestedModel: string | null;
       }[];
     };
     expect(body.allCompleted).toBe(true);
@@ -106,6 +107,7 @@ describe('batch MCP tools', () => {
       expect(entry.taskId).toMatch(/^task_/);
       expect(entry.truncated).toBe(false);
       expect(entry.nativeThreadId).toBe('thread_fake_async');
+      expect(entry.requestedModel).toBeNull();
     }
   });
 

@@ -89,6 +89,12 @@ export interface WorkerTask {
   completedAt: string | null;
   /** Codex thread id from `thread.started`, when the SDK emitted one. */
   nativeThreadId: string | null;
+  /**
+   * Model requested at dispatch time (worker model or bridge default),
+   * or null when the runtime default applied. Records intent — the
+   * runtime does not report which model it actually ran.
+   */
+  requestedModel: string | null;
   progress: TaskProgressEntry[];
   /** Final assistant message. Set only after `turn.completed`. */
   result: string | null;

@@ -241,6 +241,48 @@ describe('WorkerManager', () => {
     });
   });
 
+  it('reports the resolved model and a resume hint on the worker view', async () => {
+    adapter.nextResults.push({
+      taskId: '',
+      sessionId: '',
+      status: 'succeeded',
+      externalSessionId: 'thread_hint',
+      completedAt: new Date().toISOString(),
+    });
+    const pinned = await manager.createWorker({
+      name: 'pinned',
+      workspacePath: 'E:\\ws',
+      model: 'gpt-pinned',
+    });
+    expect(pinned).toMatchObject({
+      effectiveModel: 'gpt-pinned',
+      modelSource: 'worker',
+      resumeHint: null,
+    });
+
+    const unpinned = await manager.createWorker({ name: 'free', workspacePath: 'E:\\ws2' });
+    expect(unpinned).toMatchObject({
+      effectiveModel: null,
+      modelSource: 'runtime_default',
+      resumeHint: null,
+    });
+
+    await manager.sendMessage(pinned.workerId, 'hi');
+    expect(manager.getWorker(pinned.workerId)).toMatchObject({
+      state: 'ready',
+      resumeHint: 'codex resume thread_hint',
+    });
+  });
+
+  it('reports the bridge default model when the worker does not pin one', async () => {
+    adapter.defaultModel = 'bridge-fallback';
+    const worker = await manager.createWorker({ name: 'w1', workspacePath: 'E:\\ws' });
+    expect(worker).toMatchObject({
+      effectiveModel: 'bridge-fallback',
+      modelSource: 'bridge_default',
+    });
+  });
+
   it('re-validates the workspace on every send', async () => {
     const calls: string[] = [];
     const m = new WorkerManager({

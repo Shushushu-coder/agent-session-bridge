@@ -12,6 +12,7 @@ import type {
 } from '../contracts/task.js';
 import { MAX_TASK_PROGRESS } from '../contracts/task.js';
 import type {
+  ModelSource,
   SendMessageResult,
   WorkerRecord,
   WorkerView,
@@ -87,6 +88,8 @@ export interface TaskStatusView {
   startedAt: string | null;
   completedAt: string | null;
   nativeThreadId: string | null;
+  /** Model requested at dispatch; null when the runtime default applied. */
+  requestedModel: string | null;
   progress: TaskProgressEntry[];
   errorCategory: string | null;
   errorMessage: string | null;
@@ -99,6 +102,7 @@ export interface TaskResultView {
   workerId: string;
   status: 'completed' | 'failed' | 'unknown' | 'NOT_READY';
   nativeThreadId: string | null;
+  requestedModel: string | null;
   response: string | null;
   usage: TaskUsage | null;
   completedAt: string | null;
@@ -116,6 +120,7 @@ export interface BatchTaskView {
   /** Current task status for accepted members; null for rejected ones. */
   status: TaskStatus | null;
   nativeThreadId: string | null;
+  requestedModel: string | null;
   /** Rejection code, or the task's own error category once terminal. */
   errorCategory: string | null;
   errorMessage: string | null;
@@ -153,6 +158,7 @@ export interface BatchTaskResultView {
   dispatchStatus: 'accepted' | 'rejected';
   status: 'completed' | 'failed' | 'unknown' | 'NOT_READY' | null;
   nativeThreadId: string | null;
+  requestedModel: string | null;
   /** Truncated to MAX_BATCH_RESPONSE_CHARS; read get_task_result for the full reply. */
   response: string | null;
   responseLength: number;
@@ -369,6 +375,7 @@ export class WorkerManager {
         updatedAt: now,
         completedAt: null,
         nativeThreadId: null,
+        requestedModel: this.resolveModel(record.model).model,
         progress: [],
         result: null,
         usage: null,
@@ -410,6 +417,7 @@ export class WorkerManager {
       startedAt: task.startedAt,
       completedAt: task.completedAt,
       nativeThreadId: task.nativeThreadId,
+      requestedModel: task.requestedModel,
       progress: task.progress.map((entry) => ({ ...entry })),
       errorCategory: task.error?.category ?? null,
       errorMessage: task.error?.message ?? null,
@@ -424,6 +432,7 @@ export class WorkerManager {
       taskId: task.taskId,
       workerId: task.workerId,
       nativeThreadId: task.nativeThreadId,
+      requestedModel: task.requestedModel,
       ...association,
     };
     if (task.status === 'accepted' || task.status === 'running') {
@@ -622,6 +631,7 @@ export class WorkerManager {
           dispatchStatus: 'rejected',
           status: null,
           nativeThreadId: null,
+          requestedModel: null,
           response: null,
           responseLength: 0,
           truncated: false,
@@ -647,6 +657,7 @@ export class WorkerManager {
         dispatchStatus: 'accepted',
         status: result.status,
         nativeThreadId: result.nativeThreadId,
+        requestedModel: result.requestedModel,
         response: truncated
           ? `${result.response!.slice(0, MAX_BATCH_RESPONSE_CHARS)}…`
           : result.response,
@@ -1207,6 +1218,7 @@ export class WorkerManager {
       dispatchStatus: entry.dispatchStatus,
       status: task?.status ?? null,
       nativeThreadId: task?.nativeThreadId ?? null,
+      requestedModel: task?.requestedModel ?? null,
       errorCategory: rejected ? (entry.errorCategory ?? null) : (task?.error?.category ?? null),
       errorMessage: rejected ? (entry.errorMessage ?? null) : (task?.error?.message ?? null),
     };
@@ -1345,8 +1357,36 @@ export class WorkerManager {
     return this.busy.has(record.workerId) ? 'busy' : record.state;
   }
 
+  /**
+   * Resolution order: worker-pinned model → adapter default
+   * (AGENT_SESSION_BRIDGE_MODEL) → runtime default. `null` means the
+   * bridge requests nothing and the runtime picks; it is never a guess
+   * about what the runtime actually ran.
+   */
+  private resolveModel(workerModel: string | undefined): {
+    model: string | null;
+    source: ModelSource;
+  } {
+    if (workerModel) return { model: workerModel, source: 'worker' };
+    const fallback = this.options.adapter.defaultModel;
+    if (fallback) return { model: fallback, source: 'bridge_default' };
+    return { model: null, source: 'runtime_default' };
+  }
+
   private viewOf(record: WorkerRecord): WorkerView {
-    return { ...record, state: this.viewState(record) };
+    const { model, source } = this.resolveModel(record.model);
+    return {
+      ...record,
+      state: this.viewState(record),
+      effectiveModel: model,
+      modelSource: source,
+      // No resume hint while busy: attaching to a live native thread
+      // would interleave a second writer into the same turn.
+      resumeHint:
+        record.threadId && !this.busy.has(record.workerId)
+          ? `codex resume ${record.threadId}`
+          : null,
+    };
   }
 }
 
