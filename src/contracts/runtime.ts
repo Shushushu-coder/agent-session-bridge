@@ -19,9 +19,15 @@ export interface CreateSessionInput {
 export type RuntimeStreamEvent =
   | { type: 'thread.started'; threadId: string }
   | { type: 'turn.started' }
-  | { type: 'item.started'; itemType: string; itemId?: string }
-  | { type: 'item.updated'; itemType: string; itemId?: string }
-  | { type: 'item.completed'; itemType: string; itemId?: string; text?: string }
+  | { type: 'item.started'; itemType: string; itemId?: string; detail?: string }
+  | { type: 'item.updated'; itemType: string; itemId?: string; detail?: string }
+  | {
+      type: 'item.completed';
+      itemType: string;
+      itemId?: string;
+      text?: string;
+      detail?: string;
+    }
   | { type: 'turn.completed'; usage: TaskUsage | null }
   | { type: 'turn.failed'; message: string }
   | { type: 'error'; message: string };

@@ -115,7 +115,11 @@ h2 { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: v
   border-left: 3px solid var(--c-busy); border-radius: 8px;
   padding: 8px 10px; margin-top: 10px;
 }
+.batchcard.settled { border-left-color: var(--border); opacity: .75; }
 .batchcard .bar { margin-top: 6px; }
+/* History/batch detail blocks: bounded height, internal scroll. */
+.det-body { max-height: 240px; overflow-y: auto; }
+.det-body .batchcard { margin-top: 0; border-left-color: var(--border); }
 
 .taskline {
   display: flex; align-items: center; gap: 8px;
@@ -155,6 +159,10 @@ details[open] > summary { margin-bottom: 4px; }
 .bar .b-accepted { background: var(--c-idle); }
 .foot { margin-top: 14px; color: var(--muted); font-size: 10px; display: flex; gap: 10px; }
 .empty { color: var(--muted); padding: 12px 0; }
+@media (prefers-reduced-motion: reduce) {
+  .barfill.indet { animation: none; margin-left: 0; width: 100%; opacity: .5; }
+  .wcard.st-busy { animation: none; box-shadow: 0 0 8px -2px var(--c-busy); }
+}
 .progress-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .err-text { color: var(--c-err); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>

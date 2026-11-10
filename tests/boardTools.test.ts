@@ -31,6 +31,7 @@ async function makeWorker(stack: TestStack, name: string): Promise<string> {
 interface SnapshotBody {
   generatedAt: string;
   runtimeConnected: boolean;
+  runtimeDefaultModel: string | null;
   scope: 'session' | 'all';
   hiddenWorkerCount: number;
   workerCount: number;

@@ -4,6 +4,7 @@ import type {
   CreateSessionInput,
   RuntimeStreamEvent,
 } from '../../contracts/runtime.js';
+import { redactSensitive } from '../../storage/redact.js';
 import type { WorkerSession } from '../../contracts/session.js';
 import type { AgentTask, TaskResult, TaskUsage } from '../../contracts/task.js';
 import {
@@ -12,6 +13,7 @@ import {
   type CodexSdkLike,
   type CodexThreadLike,
   type ThreadEvent,
+  type ThreadItem,
   type ThreadOptions,
   type Usage,
 } from './codexSdk.js';
@@ -241,12 +243,13 @@ function mapThreadEvent(event: ThreadEvent): RuntimeStreamEvent | undefined {
       return { type: 'turn.started' };
     case 'item.started':
     case 'item.updated':
-      return itemEvent(event.type, event.item.type, event.item.id);
+      return itemEvent(event.type, event.item.type, event.item.id, itemDetail(event.item));
     case 'item.completed':
       return itemEvent(
         'item.completed',
         event.item.type,
         event.item.id,
+        itemDetail(event.item),
         event.item.type === 'agent_message' ? event.item.text : undefined,
       );
     case 'turn.completed':
@@ -264,15 +267,49 @@ function itemEvent(
   type: 'item.started' | 'item.updated' | 'item.completed',
   itemType: string,
   itemId: string,
+  detail?: string,
   text?: string,
 ): RuntimeStreamEvent {
   const base = {
     type,
     itemType,
     ...(itemId ? { itemId } : {}),
+    ...(detail !== undefined ? { detail } : {}),
     ...(text !== undefined ? { text } : {}),
   };
   return base as RuntimeStreamEvent;
+}
+
+/**
+ * Human-meaningful payload of a thread item, when the SDK exposes one —
+ * the command line, MCP tool name, search query, changed path, or error.
+ * Redacted before it enters the stream: command lines and outputs can
+ * carry secrets, and events must stay safe to surface anywhere.
+ * Undefined for item kinds with nothing worth displaying.
+ */
+function itemDetail(item: ThreadItem): string | undefined {
+  const raw = rawItemDetail(item);
+  return raw === undefined ? undefined : redactSensitive(raw, 160);
+}
+
+function rawItemDetail(item: ThreadItem): string | undefined {
+  switch (item.type) {
+    case 'command_execution':
+      return item.command || undefined;
+    case 'mcp_tool_call':
+      return `${item.server}.${item.tool}`;
+    case 'web_search':
+      return item.query || undefined;
+    case 'file_change': {
+      const first = item.changes[0]?.path;
+      if (!first) return undefined;
+      return item.changes.length > 1 ? `${first} +${item.changes.length - 1}` : first;
+    }
+    case 'error':
+      return item.message || undefined;
+    default:
+      return undefined;
+  }
 }
 
 function normalizeUsage(usage: Usage | null | undefined): TaskUsage | null {

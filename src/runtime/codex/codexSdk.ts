@@ -4,11 +4,20 @@ import type {
   RunResult,
   RunStreamedResult,
   ThreadEvent,
+  ThreadItem,
   ThreadOptions,
   Usage,
 } from '@openai/codex-sdk';
 
-export type { CodexOptions, RunResult, RunStreamedResult, ThreadEvent, ThreadOptions, Usage };
+export type {
+  CodexOptions,
+  RunResult,
+  RunStreamedResult,
+  ThreadEvent,
+  ThreadItem,
+  ThreadOptions,
+  Usage,
+};
 
 /**
  * Minimal structural surface the adapter needs from a Codex thread. The real

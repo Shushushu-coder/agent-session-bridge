@@ -196,7 +196,12 @@ describe('CodexRuntimeAdapter', () => {
     expect(events).toEqual([
       { type: 'thread.started', threadId: 'thread_stream' },
       { type: 'turn.started' },
-      { type: 'item.completed', itemType: 'command_execution', itemId: 'cmd_1' },
+      {
+        type: 'item.completed',
+        itemType: 'command_execution',
+        itemId: 'cmd_1',
+        detail: 'echo [redacted]',
+      },
       { type: 'item.completed', itemType: 'agent_message', itemId: 'msg_1', text: 'streamed reply' },
       {
         type: 'turn.completed',

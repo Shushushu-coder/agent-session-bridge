@@ -231,7 +231,7 @@ describe('asynchronous worker tasks', () => {
     await manager.whenTaskSettled(dispatched.taskId);
     const status = manager.getTaskStatus(dispatched.taskId);
     expect(status.progress.length).toBeLessThanOrEqual(24);
-    expect(status.progress.some((entry) => entry.summary.includes('command_execution'))).toBe(true);
+    expect(status.progress.some((entry) => entry.summary.includes('running command'))).toBe(true);
     expect(JSON.stringify(status.progress)).not.toContain('aggregated_output');
     expect(manager.getTaskResult(dispatched.taskId).response).toBe('bounded');
   });

@@ -50,6 +50,8 @@ export interface BoardBatchSummary {
 export interface BoardSnapshot {
   generatedAt: string;
   runtimeConnected: boolean;
+  /** Runtime's own default model (from its config), for display on workers without a pinned model. */
+  runtimeDefaultModel: string | null;
   /** Scope the snapshot was filtered to. */
   scope: BoardScope;
   /** Workers excluded by `scope: 'session'` (created by other bridge sessions or before session tagging). */

@@ -345,6 +345,7 @@ const boardBatchSummarySchema = z.object({
 const boardSnapshotSchema = z.object({
   generatedAt: z.string(),
   runtimeConnected: z.boolean(),
+  runtimeDefaultModel: z.string().nullable(),
   scope: z.enum(['session', 'all']),
   hiddenWorkerCount: z.number(),
   workerCount: z.number(),

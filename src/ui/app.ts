@@ -8,6 +8,7 @@ import type {
 
 const POLL_MS = 1500;
 const HISTORY_LIMIT = 8;
+const SETTLED_BATCH_LINGER_MS = 90_000;
 const LIVE_STATUSES = new Set(['accepted', 'running']);
 const BAR_CLASS: Record<string, string> = {
   accepted: 'indet idle',
@@ -17,12 +18,18 @@ const BAR_CLASS: Record<string, string> = {
   unknown: 'unk',
 };
 const root = document.getElementById('app')!;
-const app = new App({ name: 'agent-session-bridge-board', version: '0.7.0' });
+const app = new App({ name: 'agent-session-bridge-board', version: '0.8.0' });
 
 let timer: ReturnType<typeof setInterval> | null = null;
 let lastError: string | null = null;
 let snapshot: BoardSnapshot | null = null;
 let inflight = false;
+// `<details>` open state survives the poll-driven rebuilds.
+const openSections = new Set<string>();
+// Batches that flip from open to settled linger briefly instead of
+// vanishing mid-glance: batchId → when it was first seen settled (ms).
+const settledBatches = new Map<string, number>();
+let prevOpenBatches = new Set<string>();
 
 function el(tag: string, cls?: string, text?: string): HTMLElement {
   const node = document.createElement(tag);
@@ -77,9 +84,11 @@ async function toggleDisplayMode(): Promise<void> {
   render();
 }
 
-/** Model the worker will request, or a readable marker for runtime default. */
+/** Model badge text: pinned/bridge model, else the runtime's own default when known. */
 function modelOf(w: BoardWorkerView): string {
   if (w.effectiveModel) return w.effectiveModel;
+  const rdm = snapshot?.runtimeDefaultModel;
+  if (rdm) return `default · ${rdm}`;
   return w.modelSource === 'runtime_default' ? 'runtime default' : '—';
 }
 
@@ -158,20 +167,33 @@ function makeCard(): CardRefs {
 
 function syncCard(refs: CardRefs, w: BoardWorkerView): void {
   refs.root.className = `wcard st-${w.state}`;
+  refs.root.title = `${w.workerId} · ${w.workspacePath}`;
   refs.dot.className = `sdot st-${w.state}`;
   refs.nameEl.textContent = w.name;
+  refs.nameEl.title = `${w.name} — ${w.workerId}`;
   refs.stateEl.className = `chip st-${w.state}`;
   refs.stateEl.textContent = w.state;
   const model = modelOf(w);
   refs.modelEl.textContent = model;
   refs.modelEl.title = model;
 
-  const t = w.latestTask;
-  show(refs.noTask, !t);
-  show(refs.taskRow, Boolean(t));
-  show(refs.barWrap, Boolean(t));
-  show(refs.meta, Boolean(t));
-  if (t) {
+  // A synchronous turn (send_worker_message) marks the worker busy with no
+  // task record — render it honestly instead of a stale task or "no tasks".
+  const interactiveBusy = w.state === 'busy' && !w.activeTaskId;
+  const t = interactiveBusy ? null : w.latestTask;
+  show(refs.noTask, !t && !interactiveBusy);
+  show(refs.taskRow, Boolean(t) || interactiveBusy);
+  show(refs.barWrap, Boolean(t) || interactiveBusy);
+  show(refs.meta, Boolean(t) || interactiveBusy);
+  if (interactiveBusy) {
+    refs.taskStatus.className = 'chip st-busy';
+    refs.taskStatus.textContent = 'busy';
+    refs.taskLabel.textContent = 'interactive turn';
+    refs.taskLabel.title = 'synchronous send_worker_message in progress';
+    refs.barFill.className = 'barfill indet';
+    refs.meta.textContent = 'synchronous turn in progress';
+    refs.meta.title = '';
+  } else if (t) {
     refs.taskStatus.className = `chip st-${t.status}`;
     refs.taskStatus.textContent = t.status;
     const label = t.label ?? t.lastProgress?.summary ?? '';
@@ -179,8 +201,7 @@ function syncCard(refs: CardRefs, w: BoardWorkerView): void {
     refs.taskLabel.title = label;
     refs.barFill.className = `barfill ${BAR_CLASS[t.status] ?? 'indet'}`;
     const meta = LIVE_STATUSES.has(t.status)
-      ? `${fmtDur(t.startedAt ?? t.createdAt)} · ${t.progressCount} events` +
-        (t.lastProgress?.summary ? ` — ${t.lastProgress.summary}` : '')
+      ? `${fmtDur(t.startedAt ?? t.createdAt)} · ${t.lastProgress?.summary ?? 'starting…'}`
       : `${fmtDur(t.startedAt, t.completedAt)} · ${
           t.usage ? `${fmtNum(t.usage.output_tokens)} out` : '—'
         } · ${fmtTime(t.completedAt ?? t.updatedAt)}`;
@@ -188,14 +209,17 @@ function syncCard(refs: CardRefs, w: BoardWorkerView): void {
     refs.meta.title = meta;
   }
   show(refs.errEl, Boolean(w.lastError));
-  if (w.lastError) refs.errEl.textContent = w.lastError.slice(0, 120);
+  if (w.lastError) {
+    refs.errEl.textContent = w.lastError.slice(0, 120);
+    refs.errEl.title = w.lastError;
+  }
 }
 
 /* ------------------------------------------------------------------ */
 /* Rebuilt rows (no animation state to preserve).                      */
 /* ------------------------------------------------------------------ */
 
-function batchLine(b: BoardBatchSummary): HTMLElement {
+function batchCard(b: BoardBatchSummary, settled: boolean): HTMLElement {
   const row = el('div', 'taskline');
   row.append(el('span', 'wname', b.requestKey));
   row.append(
@@ -203,7 +227,8 @@ function batchLine(b: BoardBatchSummary): HTMLElement {
       'span',
       'dim grow2',
       `${b.statusCounts.completed}/${b.dispatchedCount} done` +
-        (b.rejectedCount ? ` · ${b.rejectedCount} rejected` : ''),
+        (b.rejectedCount ? ` · ${b.rejectedCount} rejected` : '') +
+        (settled ? ' · settled' : ''),
     ),
   );
   row.append(el('span', 'dim mono', fmtTime(b.createdAt)));
@@ -216,7 +241,7 @@ function batchLine(b: BoardBatchSummary): HTMLElement {
     seg.style.width = `${(n / total) * 100}%`;
     bar.append(seg);
   }
-  const wrap = el('div', 'batchcard');
+  const wrap = el('div', `batchcard${settled ? ' settled' : ''}`);
   wrap.append(row, bar);
   return wrap;
 }
@@ -244,6 +269,20 @@ function kpi(label: string, value: string, tone?: 'blue' | 'red'): HTMLElement {
   tile.append(el('div', `kpi-num${tone ? ` ${tone}` : ''}`, value));
   tile.append(el('div', 'kpi-label', label));
   return tile;
+}
+
+/** `<details>` whose open state persists across poll rebuilds. */
+function detailsBlock(key: string, title: string): { d: HTMLElement; body: HTMLElement } {
+  const d = document.createElement('details');
+  d.open = openSections.has(key);
+  d.ontoggle = () => {
+    if (d.open) openSections.add(key);
+    else openSections.delete(key);
+  };
+  d.append(el('summary', undefined, title));
+  const body = el('div', 'det-body');
+  d.append(body);
+  return { d, body };
 }
 
 /* ------------------------------------------------------------------ */
@@ -287,24 +326,37 @@ function render(): void {
   const liveTasks = snapshot.recentTasks.filter((t) => LIVE_STATUSES.has(t.status));
   const openBatches = snapshot.recentBatches.filter((b) => !b.allSettled);
   const busy = snapshot.workers.filter((w) => w.state === 'busy').length;
-  const errs = snapshot.workers.filter(
-    (w) => w.state === 'error' || w.state === 'initialization_uncertain',
-  ).length;
-  const totalOut = snapshot.workers.reduce(
-    (n, w) => n + (w.usageTotals?.output_tokens ?? 0),
-    0,
-  );
+  const errs =
+    snapshot.workers.filter(
+      (w) => w.state === 'error' || w.state === 'initialization_uncertain',
+    ).length + snapshot.recentTasks.filter((t) => t.status === 'failed').length;
 
-  // KPI tiles.
+  // Recently-settled batches linger instead of vanishing mid-glance.
+  const now = Date.now();
+  for (const b of snapshot.recentBatches) {
+    if (!b.allSettled) {
+      settledBatches.delete(b.batchId);
+    } else if (prevOpenBatches.has(b.batchId) && !settledBatches.has(b.batchId)) {
+      settledBatches.set(b.batchId, now);
+    }
+  }
+  prevOpenBatches = new Set(openBatches.map((b) => b.batchId));
+  for (const [id, at] of settledBatches) {
+    if (now - at > SETTLED_BATCH_LINGER_MS) settledBatches.delete(id);
+  }
+
+  // KPI tiles: workers, running (busy covers sync turns), errors when any.
   const kpis = el('div', 'kpis');
   kpis.append(kpi('Workers', `${snapshot.workerCount}`));
-  kpis.append(kpi('Running', `${liveTasks.length}`, liveTasks.length ? 'blue' : undefined));
-  kpis.append(kpi('Errors', `${errs}`, errs ? 'red' : undefined));
-  kpis.append(kpi('Tokens out', fmtNum(totalOut)));
+  kpis.append(kpi('Running', `${busy}`, busy ? 'blue' : undefined));
+  if (errs) kpis.append(kpi('Errors', `${errs}`, 'red'));
   root.append(kpis);
 
-  // Live batch cards sit above the worker grid.
-  for (const b of openBatches) root.append(batchLine(b));
+  // Live batch cards, then lingering just-settled ones.
+  for (const b of openBatches) root.append(batchCard(b, false));
+  for (const b of snapshot.recentBatches) {
+    if (settledBatches.has(b.batchId)) root.append(batchCard(b, true));
+  }
 
   // Worker cards — active first; DOM nodes are reused per workerId.
   root.append(el('h2', undefined, 'Workers'));
@@ -330,12 +382,11 @@ function render(): void {
     root.append(grid);
   }
 
-  // History — settled tasks, collapsed by default.
+  // History — settled tasks, collapsed by default; scroll-bounded.
   const done = snapshot.recentTasks.filter((t) => !LIVE_STATUSES.has(t.status));
   if (done.length) {
-    const d = el('details');
-    d.append(el('summary', undefined, `History · ${done.length} recent task(s)`));
-    for (const t of done.slice(0, HISTORY_LIMIT)) d.append(taskLine(t, nameOf));
+    const { d, body } = detailsBlock('history', `History · ${done.length}`);
+    for (const t of done.slice(0, HISTORY_LIMIT)) body.append(taskLine(t, nameOf));
     root.append(d);
   }
 
@@ -344,16 +395,10 @@ function render(): void {
     (a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt),
   );
   if (batches.length) {
-    const d = el('details');
-    d.append(el('summary', undefined, `Batches · ${batches.length}`));
-    for (const b of batches) d.append(batchLine(b));
+    const { d, body } = detailsBlock('batches', `Batches · ${batches.length}`);
+    for (const b of batches) body.append(batchCard(b, true));
     root.append(d);
   }
-
-  const foot = el('div', 'foot');
-  foot.append(el('span', undefined, `poll ${POLL_MS}ms`));
-  foot.append(el('span', undefined, `snapshot ${fmtTime(snapshot.generatedAt)}`));
-  root.append(foot);
 }
 
 async function refreshOnce(): Promise<void> {

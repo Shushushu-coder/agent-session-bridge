@@ -80,6 +80,11 @@ export interface WorkerManagerOptions {
    * Defaults to a random per-process id.
    */
   sessionId?: string;
+  /**
+   * Runtime's own default model resolved from its config, when known —
+   * display metadata for the board's model badge. Never affects dispatch.
+   */
+  runtimeDefaultModel?: string;
 }
 
 export interface DispatchTaskResult {
@@ -223,6 +228,7 @@ export class WorkerManager {
   private readonly maxBatchTasks: number;
 
   readonly sessionId: string;
+  private readonly runtimeDefaultModel: string | null;
 
   constructor(private readonly options: WorkerManagerOptions) {
     this.verifyWorkspace = options.verifyWorkspace ?? verifyGitWorkspace;
@@ -230,6 +236,7 @@ export class WorkerManager {
     this.taskStore = options.taskStore;
     this.maxBatchTasks = Math.max(1, options.maxBatchTasks ?? DEFAULT_MAX_BATCH_TASKS);
     this.sessionId = options.sessionId ?? defaultSessionId();
+    this.runtimeDefaultModel = options.runtimeDefaultModel ?? null;
   }
 
   async createWorker(input: CreateWorkerInput): Promise<WorkerView> {
@@ -775,6 +782,7 @@ export class WorkerManager {
     return {
       generatedAt: new Date().toISOString(),
       runtimeConnected: this.options.adapter.isConnected(),
+      runtimeDefaultModel: this.runtimeDefaultModel,
       scope,
       hiddenWorkerCount: allWorkers.length - workers.length,
       workerCount: workers.length,
@@ -1113,7 +1121,7 @@ export class WorkerManager {
           progress: this.appendProgress(
             progress,
             event.type,
-            `item ${event.itemType}`,
+            progressLabel(event.itemType, event.detail),
             event.type === 'item.updated',
           ),
           responseText: text !== undefined ? text : responseText,
@@ -1520,6 +1528,26 @@ function defaultSessionId(): string {
 /** Bounded, single-line, redacted preview of a dispatched message. */
 function taskLabel(message: string): string {
   return redactSensitive(message).replace(/\s+/g, ' ').trim().slice(0, 160);
+}
+
+const ITEM_KIND_LABEL: Record<string, string> = {
+  command_execution: 'running command',
+  file_change: 'editing files',
+  agent_message: 'writing reply',
+  reasoning: 'thinking',
+  mcp_tool_call: 'calling MCP tool',
+  web_search: 'searching web',
+  todo_list: 'updating plan',
+  error: 'error',
+};
+
+/**
+ * Human-readable label for a thread item: a friendly verb phrase plus the
+ * item's own payload (command line, tool name, query) when available.
+ */
+function progressLabel(itemType: string, detail?: string): string {
+  const kind = ITEM_KIND_LABEL[itemType] ?? itemType.replace(/_/g, ' ');
+  return detail ? `${kind}: ${detail}` : kind;
 }
 
 function defaultTaskId(): string {

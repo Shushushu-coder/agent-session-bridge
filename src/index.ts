@@ -1,4 +1,6 @@
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { installProcessShutdown } from './processLifetime.js';
@@ -38,6 +40,26 @@ try {
   process.exit(2);
 }
 
+/**
+ * Best-effort read of the runtime's own default model — the top-level
+ * `model` key in the Codex config the spawned CLI also reads. Display
+ * metadata only; the bridge never overrides the runtime's choice.
+ */
+function readRuntimeDefaultModel(): string | undefined {
+  try {
+    const home = process.env.CODEX_HOME ?? join(homedir(), '.codex');
+    const text = readFileSync(join(home, 'config.toml'), 'utf8');
+    for (const line of text.split(/\r?\n/)) {
+      if (/^\s*\[/.test(line)) break;
+      const m = /^\s*model\s*=\s*["']([^"']+)["']/.exec(line);
+      if (m) return m[1];
+    }
+  } catch {
+    // No readable config — the board just shows "runtime default".
+  }
+  return undefined;
+}
+
 const codexPathOverride = process.env.AGENT_SESSION_BRIDGE_CODEX_PATH;
 const defaultModel = process.env.AGENT_SESSION_BRIDGE_MODEL;
 const adapter = new CodexRuntimeAdapter({
@@ -55,11 +77,13 @@ try {
 }
 
 const maxBatchTasks = Number(process.env.AGENT_SESSION_BRIDGE_MAX_BATCH_TASKS ?? '');
+const runtimeDefaultModel = readRuntimeDefaultModel();
 const manager = new WorkerManager({
   registry,
   taskStore,
   adapter,
   ...(Number.isInteger(maxBatchTasks) && maxBatchTasks > 0 ? { maxBatchTasks } : {}),
+  ...(runtimeDefaultModel ? { runtimeDefaultModel } : {}),
 });
 
 const handle = serveStdio(() => createServer({ manager, adapter, registry }), {
