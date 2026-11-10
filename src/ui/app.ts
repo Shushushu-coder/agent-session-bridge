@@ -7,8 +7,10 @@ import type {
 } from '../contracts/board.js';
 
 const POLL_MS = 1500;
+const HISTORY_LIMIT = 8;
+const LIVE_STATUSES = new Set(['accepted', 'running']);
 const root = document.getElementById('app')!;
-const app = new App({ name: 'agent-session-bridge-board', version: '0.4.0' });
+const app = new App({ name: 'agent-session-bridge-board', version: '0.5.0' });
 
 let timer: ReturnType<typeof setInterval> | null = null;
 let lastError: string | null = null;
@@ -32,15 +34,26 @@ function fmtTime(iso: string | null): string {
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleTimeString();
 }
 
-function fmtTokens(usage: BoardTaskSummary['usage']): string {
-  if (!usage) return '—';
-  const out = usage.output_tokens.toLocaleString();
-  const inp = (usage.input_tokens / 1000).toFixed(0);
-  return `${out} out / ${inp}k in`;
+function fmtNum(n: number): string {
+  if (n >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
+  if (n >= 1e3) return `${(n / 1e3).toFixed(1)}k`;
+  return `${n}`;
 }
 
-function shortId(id: string | null): string {
-  return id ? id.slice(0, 14) : '—';
+function fmtTokens(usage: BoardTaskSummary['usage']): string {
+  if (!usage) return '—';
+  return `${fmtNum(usage.output_tokens)} out · ${fmtNum(usage.input_tokens)} in`;
+}
+
+/** "2m10s" between two ISO stamps; `toIso` null/omitted means now. */
+function fmtDur(fromIso: string | null, toIso?: string | null): string {
+  if (!fromIso) return '';
+  const start = new Date(fromIso).getTime();
+  const end = toIso ? new Date(toIso).getTime() : Date.now();
+  if (Number.isNaN(start) || Number.isNaN(end)) return '';
+  const s = Math.max(0, Math.round((end - start) / 1000));
+  const m = Math.floor(s / 60);
+  return m > 0 ? `${m}m${s % 60}s` : `${s}s`;
 }
 
 function applyTheme(): void {
@@ -62,53 +75,23 @@ async function toggleDisplayMode(): Promise<void> {
   render();
 }
 
-function workerRow(w: BoardWorkerView): HTMLElement {
-  const tr = el('tr');
-  const name = el('td');
-  name.append(el('div', undefined, w.name), el('div', 'dim mono', w.workerId));
-  tr.append(name);
-
-  const state = el('td');
-  state.append(chip(w.state));
-  if (w.lastError) state.append(el('div', 'dim', w.lastError.slice(0, 80)));
-  tr.append(state);
-
-  const task = el('td');
-  if (w.latestTask) {
-    task.append(chip(w.latestTask.status));
-    const p = el('div', 'dim progress-text', w.latestTask.lastProgress?.summary ?? '');
-    p.title = w.latestTask.lastProgress?.summary ?? '';
-    task.append(p);
-  } else {
-    task.append(el('span', 'dim', 'no tasks'));
-  }
-  tr.append(task);
-
-  const tokens = el('td', 'mono', fmtTokens(w.latestTask?.usage ?? null));
-  tr.append(tokens);
-
-  const updated = el('td', 'dim', fmtTime(w.latestTask?.updatedAt ?? w.updatedAt));
-  tr.append(updated);
-  return tr;
-}
-
-function batchRow(b: BoardBatchSummary): HTMLElement {
-  const tr = el('tr');
-  const id = el('td');
-  id.append(el('div', 'mono', b.batchId), el('div', 'dim', b.requestKey));
-  tr.append(id);
-
-  const counts = el('td');
-  const total = Math.max(1, b.dispatchedCount);
-  counts.append(
+function batchLine(b: BoardBatchSummary): HTMLElement {
+  const row = el('div', 'taskline');
+  const id = el('span');
+  id.append(el('span', 'wname', b.requestKey));
+  id.append(el('span', 'dim mono', ` ${b.batchId.slice(0, 20)}`));
+  row.append(id);
+  row.append(
     el(
       'span',
-      'dim',
+      'dim grow2',
       `${b.statusCounts.completed}/${b.dispatchedCount} done` +
         (b.rejectedCount ? ` · ${b.rejectedCount} rejected` : ''),
     ),
   );
+  row.append(el('span', 'dim mono', fmtTime(b.createdAt)));
   const bar = el('div', 'bar');
+  const total = Math.max(1, b.dispatchedCount);
   for (const key of ['completed', 'running', 'accepted', 'failed', 'unknown'] as const) {
     const n = b.statusCounts[key];
     if (!n) continue;
@@ -116,40 +99,60 @@ function batchRow(b: BoardBatchSummary): HTMLElement {
     seg.style.width = `${(n / total) * 100}%`;
     bar.append(seg);
   }
-  counts.append(bar);
-  tr.append(counts);
-  tr.append(el('td', 'dim', fmtTime(b.createdAt)));
-  return tr;
+  const wrap = el('div', 'batch-wrap');
+  wrap.append(row, bar);
+  return wrap;
 }
 
-function activityRow(t: BoardTaskSummary): HTMLElement {
-  const tr = el('tr');
-  tr.append(el('td', 'mono dim', t.taskId.slice(0, 18)));
-  const st = el('td');
-  st.append(chip(t.status));
-  tr.append(st);
-  const what = el('td', 'progress-text dim', t.lastProgress?.summary ?? '');
-  what.title = t.lastProgress?.summary ?? '';
-  tr.append(what);
-  tr.append(el('td', 'dim', fmtTime(t.updatedAt)));
-  return tr;
+function taskLine(t: BoardTaskSummary, nameOf: (id: string) => string, live: boolean): HTMLElement {
+  const row = el('div', `taskline${live ? ' live' : ''}`);
+  row.append(el('span', live ? 'wname' : 'dim', nameOf(t.workerId)));
+  row.append(chip(t.status));
+  const p = el('span', 'dim progress-text grow2', t.lastProgress?.summary ?? '');
+  p.title = t.lastProgress?.summary ?? '';
+  row.append(p);
+  const timing = live
+    ? fmtDur(t.startedAt ?? t.createdAt)
+    : `${fmtDur(t.startedAt, t.completedAt)} · ${fmtTime(t.completedAt ?? t.updatedAt)}`;
+  row.append(el('span', 'dim mono', timing));
+  return row;
+}
+
+function workerCard(w: BoardWorkerView): HTMLElement {
+  const card = el('div', `wcard st-${w.state}`);
+  const top = el('div', 'wtop');
+  top.append(el('span', 'wname', w.name), chip(w.state));
+  card.append(top);
+  const t = w.latestTask;
+  if (t) {
+    const line = el('div', 'wline');
+    line.append(chip(t.status));
+    const p = el('span', 'dim progress-text', t.lastProgress?.summary ?? '');
+    p.title = t.lastProgress?.summary ?? '';
+    line.append(p);
+    card.append(line);
+    card.append(
+      el(
+        'div',
+        'wline dim',
+        `${w.taskCount} task(s) · ${fmtTokens(w.usageTotals)} · ${fmtTime(t.updatedAt)}`,
+      ),
+    );
+  } else {
+    card.append(el('div', 'wline dim', 'no tasks yet'));
+  }
+  if (w.lastError) card.append(el('div', 'wline err-text', w.lastError.slice(0, 120)));
+  return card;
 }
 
 function render(): void {
   root.replaceChildren();
   const top = el('div', 'topbar');
-  top.append(el('h1', undefined, 'Worker Board'));
-  top.append(el('span', `dot ${snapshot ? (snapshot.runtimeConnected ? 'ok' : 'err') : ''}`));
   top.append(
-    el(
-      'span',
-      'meta',
-      snapshot
-        ? `${snapshot.workerCount} worker(s) · ${snapshot.runtimeConnected ? 'runtime ok' : 'runtime down'}`
-        : 'no data yet',
-    ),
+    el('span', `dot ${snapshot ? (snapshot.runtimeConnected ? 'ok' : 'err') : ''}`),
+    el('h1', undefined, 'Worker Board'),
+    el('span', 'grow'),
   );
-  top.append(el('span', 'grow'));
   const ctx = app.getHostContext();
   if (ctx?.availableDisplayModes?.includes('fullscreen')) {
     const btn = el(
@@ -175,36 +178,61 @@ function render(): void {
     return;
   }
 
+  const nameOf = (id: string): string =>
+    snapshot!.workers.find((w) => w.workerId === id)?.name ?? id.slice(0, 14);
+
+  // Stat strip: worker health + live task count + cumulative output.
+  const busy = snapshot.workers.filter((w) => w.state === 'busy').length;
+  const errs = snapshot.workers.filter(
+    (w) => w.state === 'error' || w.state === 'initialization_uncertain',
+  ).length;
+  const liveTasks = snapshot.recentTasks.filter((t) => LIVE_STATUSES.has(t.status));
+  const openBatches = snapshot.recentBatches.filter((b) => !b.allSettled);
+  const totalOut = snapshot.workers.reduce(
+    (n, w) => n + (w.usageTotals?.output_tokens ?? 0),
+    0,
+  );
+  const strip = el('div', 'statstrip');
+  strip.append(el('span', 'stat', `${snapshot.workerCount} workers`));
+  if (busy) strip.append(el('span', 'stat stat-busy', `${busy} busy`));
+  if (errs) strip.append(el('span', 'stat stat-err', `${errs} error`));
+  if (liveTasks.length) strip.append(el('span', 'stat stat-busy', `${liveTasks.length} running`));
+  if (totalOut) strip.append(el('span', 'stat', `Σ ${fmtNum(totalOut)} out`));
+  root.append(strip);
+
+  // Workers first — the primary monitoring target.
   root.append(el('h2', undefined, 'Workers'));
   if (snapshot.workers.length === 0) {
     root.append(el('div', 'empty', 'no managed workers'));
   } else {
-    const table = el('table');
-    const head = el('tr');
-    for (const h of ['worker', 'state', 'latest task', 'tokens', 'updated']) head.append(el('th', undefined, h));
-    table.append(head);
-    for (const w of snapshot.workers) table.append(workerRow(w));
-    root.append(table);
+    for (const w of snapshot.workers) root.append(workerCard(w));
   }
 
-  if (snapshot.recentBatches.length > 0) {
-    root.append(el('h2', undefined, 'Batches'));
-    const table = el('table');
-    const head = el('tr');
-    for (const h of ['batch', 'progress', 'created']) head.append(el('th', undefined, h));
-    table.append(head);
-    for (const b of snapshot.recentBatches) table.append(batchRow(b));
-    root.append(table);
+  // Live section — only rendered while something is in flight.
+  if (liveTasks.length || openBatches.length) {
+    root.append(el('h2', 'live-h', 'Live'));
+    for (const t of liveTasks) root.append(taskLine(t, nameOf, true));
+    for (const b of openBatches) root.append(batchLine(b));
   }
 
-  if (snapshot.recentTasks.length > 0) {
-    root.append(el('h2', undefined, 'Activity'));
-    const table = el('table');
-    const head = el('tr');
-    for (const h of ['task', 'status', 'last event', 'updated']) head.append(el('th', undefined, h));
-    table.append(head);
-    for (const t of snapshot.recentTasks.slice(0, 8)) table.append(activityRow(t));
-    root.append(table);
+  // History — settled tasks, collapsed by default.
+  const done = snapshot.recentTasks.filter((t) => !LIVE_STATUSES.has(t.status));
+  if (done.length) {
+    const d = el('details');
+    d.append(el('summary', undefined, `History · ${done.length} recent task(s)`));
+    for (const t of done.slice(0, HISTORY_LIMIT)) d.append(taskLine(t, nameOf, false));
+    root.append(d);
+  }
+
+  // Batch history — collapsed; requestKey is the primary label.
+  const batches = [...snapshot.recentBatches].sort(
+    (a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt),
+  );
+  if (batches.length) {
+    const d = el('details');
+    d.append(el('summary', undefined, `Batches · ${batches.length}`));
+    for (const b of batches) d.append(batchLine(b));
+    root.append(d);
   }
 
   const foot = el('div', 'foot');

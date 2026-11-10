@@ -763,6 +763,7 @@ export class WorkerManager {
   private taskSummary(task: WorkerTask): BoardTaskSummary {
     return {
       taskId: task.taskId,
+      workerId: task.workerId,
       requestKey: task.requestKey,
       status: task.status,
       createdAt: task.createdAt,

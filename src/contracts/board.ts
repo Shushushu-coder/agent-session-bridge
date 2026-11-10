@@ -4,6 +4,7 @@ import type { WorkerView } from './worker.js';
 /** Bounded per-task summary used by the board snapshot. No prompt/result text. */
 export interface BoardTaskSummary {
   taskId: string;
+  workerId: string;
   requestKey: string;
   status: TaskStatus;
   createdAt: string;

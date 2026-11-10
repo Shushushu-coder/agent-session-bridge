@@ -36,8 +36,9 @@ interface SnapshotBody {
     activeTaskId: string | null;
     usageTotals: { output_tokens: number } | null;
     latestTask: { taskId: string; status: string; progressCount: number } | null;
+    resumeHint: string | null;
   }[];
-  recentTasks: { taskId: string; status: string }[];
+  recentTasks: { taskId: string; workerId: string; status: string }[];
   recentBatches: {
     batchId: string;
     dispatchedCount: number;
@@ -98,6 +99,9 @@ describe('board MCP tools', () => {
     }
     expect(body.recentTasks.length).toBe(2);
     expect(body.recentTasks.every((t) => t.status === 'completed')).toBe(true);
+    expect(new Set(body.recentTasks.map((t) => t.workerId))).toEqual(
+      new Set([backend, frontend]),
+    );
     expect(body.recentBatches).toHaveLength(1);
     expect(body.recentBatches[0]).toMatchObject({
       batchId,
@@ -105,7 +109,7 @@ describe('board MCP tools', () => {
       allSettled: true,
       allCompleted: true,
     });
-    expect(body.recentBatches[0].statusCounts.completed).toBe(2);
+    expect(body.recentBatches[0]!.statusCounts.completed).toBe(2);
   });
 
   it('reports the live task on a worker while a turn is in flight', async () => {

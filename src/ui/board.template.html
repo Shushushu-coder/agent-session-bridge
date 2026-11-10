@@ -39,26 +39,61 @@ body {
 .dot.ok { background: var(--c-ready); }
 .dot.err { background: var(--c-err); }
 .grow { flex: 1; }
+.grow2 { flex: 1; min-width: 0; }
 button {
   font: inherit; color: var(--fg); background: var(--chip);
   border: 1px solid var(--border); border-radius: 6px;
   padding: 2px 8px; cursor: pointer;
 }
 button:hover { border-color: var(--accent); }
-.meta { color: var(--muted); font-size: 11px; }
 .err-banner {
   margin: 8px 0; padding: 6px 8px; border: 1px solid var(--c-err);
   border-radius: 6px; color: var(--c-err); display: none;
 }
 h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 14px 0 6px; }
-table { width: 100%; border-collapse: collapse; }
-th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
-th { color: var(--muted); font-weight: 500; font-size: 11px; }
-tr:hover td { background: var(--header); }
+h2.live-h { color: var(--c-busy); }
+
+.statstrip { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 2px; }
+.stat {
+  padding: 1px 8px; border-radius: 999px; font-size: 11px;
+  background: var(--chip); color: var(--muted); border: 1px solid var(--border);
+}
+.stat-busy { color: var(--c-busy); border-color: var(--c-busy); }
+.stat-err { color: var(--c-err); border-color: var(--c-err); }
+
+.wcard {
+  border: 1px solid var(--border); border-left: 3px solid var(--border);
+  border-radius: 8px; padding: 7px 10px; margin-bottom: 8px;
+}
+.wcard.st-busy { border-left-color: var(--c-busy); }
+.wcard.st-ready { border-left-color: var(--c-ready); }
+.wcard.st-error, .wcard.st-initialization_uncertain { border-left-color: var(--c-err); }
+.wtop { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.wname { font-weight: 600; }
+.wline { display: flex; align-items: center; gap: 6px; margin-top: 4px; font-size: 11px; }
+.err-text { color: var(--c-err); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.taskline {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 2px; border-bottom: 1px solid var(--border); font-size: 11px;
+}
+.taskline.live { padding-left: 8px; border-left: 2px solid var(--c-busy); }
+.batch-wrap { padding: 5px 2px; border-bottom: 1px solid var(--border); }
+
+details { margin: 10px 0 0; }
+details > summary {
+  cursor: pointer; font-size: 11px; text-transform: uppercase;
+  letter-spacing: .05em; color: var(--muted); list-style: none;
+}
+details > summary::before { content: '▸ '; }
+details[open] > summary::before { content: '▾ '; }
+details > summary:hover { color: var(--fg); }
+details[open] > summary { margin-bottom: 4px; }
+
 .chip {
-  display: inline-block; padding: 1px 7px; border-radius: 999px;
-  font-size: 11px; white-space: nowrap; background: var(--chip);
-  border: 1px solid var(--border);
+  display: inline-block; padding: 0 7px; border-radius: 999px;
+  font-size: 10px; white-space: nowrap; background: var(--chip);
+  border: 1px solid var(--border); flex: none;
 }
 .chip.st-ready { color: var(--c-ready); border-color: var(--c-ready); }
 .chip.st-busy, .chip.st-running, .chip.st-accepted, .chip.st-initializing {
@@ -69,7 +104,7 @@ tr:hover td { background: var(--header); }
 .chip.st-completed { color: var(--c-ready); border-color: var(--c-ready); }
 .mono { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 11px; }
 .dim { color: var(--muted); }
-.bar { display: flex; height: 6px; border-radius: 3px; overflow: hidden; background: var(--chip); margin-top: 4px; min-width: 80px; }
+.bar { display: flex; height: 5px; border-radius: 3px; overflow: hidden; background: var(--chip); margin-top: 4px; }
 .bar > span { display: block; height: 100%; }
 .bar .b-completed { background: var(--c-ready); }
 .bar .b-running { background: var(--c-busy); }
@@ -78,7 +113,7 @@ tr:hover td { background: var(--header); }
 .bar .b-accepted { background: var(--c-idle); }
 .foot { margin-top: 12px; color: var(--muted); font-size: 11px; display: flex; gap: 10px; }
 .empty { color: var(--muted); padding: 10px 0; }
-.progress-text { max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.progress-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>
 </head>
 <body>

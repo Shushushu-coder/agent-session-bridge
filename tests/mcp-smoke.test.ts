@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 const TSX_CLI = fileURLToPath(new URL('../node_modules/tsx/dist/cli.mjs', import.meta.url));
 const FAKE_SERVER = fileURLToPath(new URL('./support/fakeStdioServer.ts', import.meta.url));
 import { afterEach, describe, expect, it } from 'vitest';
+import { BRIDGE_NAME, BRIDGE_VERSION } from '../src/server.js';
 
 const SERVER_ENTRY = fileURLToPath(new URL('../dist/index.js', import.meta.url));
 
@@ -87,8 +88,8 @@ describe('MCP stdio smoke test', () => {
 
       try {
         expect(client.getServerVersion()).toEqual({
-          name: 'agent-session-bridge',
-          version: '0.3.0',
+          name: BRIDGE_NAME,
+          version: BRIDGE_VERSION,
         });
         await client.ping();
 
@@ -100,10 +101,12 @@ describe('MCP stdio smoke test', () => {
           'dispatch_worker_task',
           'get_batch_results',
           'get_batch_status',
+          'get_board_snapshot',
           'get_task_result',
           'get_task_status',
           'get_worker',
           'list_workers',
+          'open_worker_board',
           'send_worker_message',
         ]);
 
