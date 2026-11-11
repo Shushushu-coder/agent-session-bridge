@@ -61,7 +61,7 @@ docs/                      # architecture.md、roadmap.md 与设计报告
 ```
 
 ### 数据目录
-默认 `<repo>/sessions/`（已 gitignore），可用 `AGENT_SESSION_BRIDGE_DATA_DIR` 覆盖。调试持久化状态时先看这里：`workers.json` 存 Worker 元数据，`tasks.json` 存任务状态/进度摘要/最终回复/token 用量与不可变的 batch→task 映射。
+默认 `~/.agent-session-bridge/`（包安装目录不可作为持久位置——npx 缓存与全局目录会在升级/清理时丢状态），可用 `AGENT_SESSION_BRIDGE_DATA_DIR` 覆盖；源码 checkout 里 gitignored 的 `sessions/` 仅为历史默认。调试持久化状态时先看这里：`workers.json` 存 Worker 元数据，`tasks.json` 存任务状态/进度摘要/最终回复/token 用量与不可变的 batch→task 映射。
 
 全部 13 个 MCP 工具的清单与语义见 `README.md`（"MCP tools" 表及 board/watch 章节）；新增或修改工具时请保持 README 同步。
 

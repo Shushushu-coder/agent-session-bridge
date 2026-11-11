@@ -1,5 +1,6 @@
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+#!/usr/bin/env node
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { formatRolloutLine } from './format.js';
 import { renderBoard } from './board.js';
 import { loadBoardData, type WatchWorker } from './registry.js';
@@ -17,9 +18,8 @@ import { readTailLines, RolloutTail } from './rolloutTail.js';
  * It never writes to either store and never touches Codex Desktop.
  */
 
-const moduleDir = dirname(fileURLToPath(import.meta.url));
 const defaultDataDir =
-  process.env.AGENT_SESSION_BRIDGE_DATA_DIR ?? resolve(moduleDir, '..', '..', 'sessions');
+  process.env.AGENT_SESSION_BRIDGE_DATA_DIR ?? join(homedir(), '.agent-session-bridge');
 
 interface Args {
   follow: string | undefined;
@@ -66,13 +66,14 @@ function parseArgs(argv: string[]): Args {
 const HELP = `agent-session-bridge watch — live worker observer (read-only)
 
 Usage:
-  npm run watch                          status board for all workers
-  npm run watch -- --follow <id|name>    live message stream for one worker
-  npm run watch -- --once                print the board once and exit
+  agent-session-bridge-watch                          status board for all workers
+  agent-session-bridge-watch --follow <id|name>       live message stream for one worker
+  agent-session-bridge-watch --once                   print the board once and exit
+  (from a source checkout: npm run watch [-- ...])
 
 Options:
   --follow <workerId|name>   tail that worker's Codex rollout file
-  --dir <path>               bridge data dir (default: sessions/ or env)
+  --dir <path>               bridge data dir (default: ~/.agent-session-bridge or env)
   --codex-home <path>        rollout root (default: ~/.codex/sessions)
   --interval <ms>            board refresh interval (default 500)
   --lines <n>                backfill lines in follow mode (default 40)

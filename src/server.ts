@@ -1,4 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/server';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   registerAppResource,
   registerAppTool,
@@ -11,8 +14,14 @@ import type { SessionRegistry } from './storage/sessionRegistry.js';
 import { BOARD_HTML } from './ui/boardHtml.generated.js';
 import { WorkerManager, WorkerToolError } from './workers/workerManager.js';
 
+const moduleDir = dirname(fileURLToPath(import.meta.url));
+
 export const BRIDGE_NAME = 'agent-session-bridge';
-export const BRIDGE_VERSION = '0.4.0';
+export const BRIDGE_VERSION = (
+  JSON.parse(readFileSync(join(moduleDir, '..', 'package.json'), 'utf8')) as {
+    version: string;
+  }
+).version;
 export const BRIDGE_RUNTIME = 'codex';
 export const BOARD_RESOURCE_URI = 'ui://agent-session-bridge/worker-board';
 

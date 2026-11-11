@@ -187,8 +187,17 @@ the server, does not keep the turn running.
 
 ## Install
 
+From npm:
+
 ```sh
-npm install
+npm install -g agent-session-bridge   # provides `agent-session-bridge` + `agent-session-bridge-watch`
+npx -y agent-session-bridge           # or run the stdio server straight from the registry
+```
+
+From source:
+
+```sh
+npm install && npm run build          # server entry: dist/index.js
 ```
 
 ## Commands
@@ -208,13 +217,15 @@ npm install
 
 A read-only terminal observer for managed workers — useful while Codex
 Desktop is busy and its sidebar cannot show externally created threads.
+Installed from npm it is the `agent-session-bridge-watch` binary; from a
+source checkout it is `npm run watch`:
 
 ```sh
-npm run watch                          # status board for all workers
-npm run watch -- --follow w-a          # live message stream of one worker
-npm run watch -- --follow wrk_cf96...  # workerId also works
-npm run watch -- --once                # print the board once and exit
-npm run watch -- --help                # all options (--dir, --codex-home, --interval, --lines)
+agent-session-bridge-watch                          # status board for all workers
+agent-session-bridge-watch --follow w-a             # live message stream of one worker
+agent-session-bridge-watch --follow wrk_cf96...     # workerId also works
+agent-session-bridge-watch --once                   # print the board once and exit
+agent-session-bridge-watch --help                   # all options (--dir, --codex-home, --interval, --lines)
 ```
 
 The board polls `workers.json` + `tasks.json` (~500 ms) and shows per
@@ -276,12 +287,15 @@ compiler is present.
 
 | Variable                            | Purpose                                        |
 | ----------------------------------- | ---------------------------------------------- |
-| `AGENT_SESSION_BRIDGE_DATA_DIR`     | Data directory for `workers.json` and `tasks.json` (default `<repo>/sessions`) |
+| `AGENT_SESSION_BRIDGE_DATA_DIR`     | Data directory for `workers.json` and `tasks.json` (default `~/.agent-session-bridge`) |
 | `AGENT_SESSION_BRIDGE_CODEX_PATH`   | Codex binary override (`codexPathOverride`)    |
 | `AGENT_SESSION_BRIDGE_MODEL`        | Bridge-level default model for workers without one (`modelSource: "bridge_default"`) |
 | `AGENT_SESSION_BRIDGE_MAX_BATCH_TASKS` | Max tasks a batch may dispatch (default 3)  |
 
-`sessions/` is gitignored. `workers.json` stores worker metadata.
+The default data directory is `~/.agent-session-bridge` so state survives
+`npx` cache cleanups and package upgrades; point
+`AGENT_SESSION_BRIDGE_DATA_DIR` elsewhere (e.g. a checkout-local
+`sessions/`) to relocate it. `workers.json` stores worker metadata.
 `tasks.json` stores task status, a short progress summary, the final reply,
 token usage, and the immutable batch→task mapping. Neither file stores
 credentials, member prompts, or the raw SDK event stream.
@@ -298,9 +312,12 @@ this server, add an entry like this to `~/.codex/config.toml` yourself:
 
 ```toml
 [mcp_servers.agent-session-bridge]
-command = "node"
-args = ["E:\\Projects\\agent-session-bridge\\dist\\index.js"]
+command = "agent-session-bridge"          # npm-installed bin on PATH
 ```
+
+Prefer not to install globally? Use `command = "npx"` with
+`args = ["-y", "agent-session-bridge"]`. From a source checkout use
+`command = "node"` with `args = ["<repo>/dist/index.js"]`.
 
 To reload the bridge after changing its code **without restarting Codex
 Desktop**: Codex watches `config.toml`, so toggling `enabled = false` →

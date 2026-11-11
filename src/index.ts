@@ -1,8 +1,8 @@
+#!/usr/bin/env node
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { installProcessShutdown } from './processLifetime.js';
 import { CodexRuntimeAdapter } from './runtime/codex/codexRuntimeAdapter.js';
 import { createServer } from './server.js';
@@ -10,11 +10,11 @@ import { SessionRegistry } from './storage/sessionRegistry.js';
 import { TaskStore } from './storage/taskStore.js';
 import { WorkerManager } from './workers/workerManager.js';
 
-const moduleDir = dirname(fileURLToPath(import.meta.url));
-
-// Data dir: <project>/sessions by default (gitignored), overridable via env.
+// Data dir: ~/.agent-session-bridge by default, overridable via env. A
+// package-relative default would lose state under npx caches and global
+// installs.
 const dataDir =
-  process.env.AGENT_SESSION_BRIDGE_DATA_DIR ?? resolve(moduleDir, '..', 'sessions');
+  process.env.AGENT_SESSION_BRIDGE_DATA_DIR ?? join(homedir(), '.agent-session-bridge');
 const registryPath = join(dataDir, 'workers.json');
 const taskStorePath = join(dataDir, 'tasks.json');
 
