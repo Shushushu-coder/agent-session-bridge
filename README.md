@@ -190,8 +190,8 @@ the server, does not keep the turn running.
 From npm:
 
 ```sh
-npm install -g agent-session-bridge   # provides `agent-session-bridge` + `agent-session-bridge-watch`
-npx -y agent-session-bridge           # or run the stdio server straight from the registry
+npm install -g @shushushu-coder/agent-session-bridge   # provides `agent-session-bridge` + `agent-session-bridge-watch`
+npx -y @shushushu-coder/agent-session-bridge           # or run the stdio server straight from the registry
 ```
 
 From source:
@@ -316,7 +316,7 @@ command = "agent-session-bridge"          # npm-installed bin on PATH
 ```
 
 Prefer not to install globally? Use `command = "npx"` with
-`args = ["-y", "agent-session-bridge"]`. From a source checkout use
+`args = ["-y", "@shushushu-coder/agent-session-bridge"]`. From a source checkout use
 `command = "node"` with `args = ["<repo>/dist/index.js"]`.
 
 To reload the bridge after changing its code **without restarting Codex
