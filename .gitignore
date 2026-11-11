@@ -31,3 +31,7 @@ sessions/
 Thumbs.db
 tmp/
 .tmp/
+
+# Local documents and agent guidelines
+AGENTS.md
+docs/
