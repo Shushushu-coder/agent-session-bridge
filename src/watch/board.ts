@@ -54,7 +54,7 @@ export function renderBoard(
   const latest = latestTasksByWorker(tasks);
   const lines: string[] = [];
   const hh = new Date(now).toTimeString().slice(0, 8);
-  lines.push(`agent-session-bridge watch        ${hh}`);
+  lines.push(`worker-session-bridge watch        ${hh}`);
   lines.push('─'.repeat(46));
   if (opts.readable === false) lines.push('  (data files unreadable this tick — retrying)');
   if (workers.length === 0) lines.push('  no workers registered');

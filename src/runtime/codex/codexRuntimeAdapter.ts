@@ -58,7 +58,7 @@ interface SessionEntry {
 export class CodexRuntimeAdapter implements AgentRuntimeAdapter {
   readonly kind = 'codex' as const;
 
-  /** Bridge-level default model (e.g. AGENT_SESSION_BRIDGE_MODEL). */
+  /** Bridge-level default model (e.g. WORKER_SESSION_BRIDGE_MODEL). */
   get defaultModel(): string | undefined {
     return this.options.model;
   }

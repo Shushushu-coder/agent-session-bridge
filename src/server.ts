@@ -16,14 +16,14 @@ import { WorkerManager, WorkerToolError } from './workers/workerManager.js';
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 
-export const BRIDGE_NAME = 'agent-session-bridge';
+export const BRIDGE_NAME = 'worker-session-bridge';
 export const BRIDGE_VERSION = (
   JSON.parse(readFileSync(join(moduleDir, '..', 'package.json'), 'utf8')) as {
     version: string;
   }
 ).version;
 export const BRIDGE_RUNTIME = 'codex';
-export const BOARD_RESOURCE_URI = 'ui://agent-session-bridge/worker-board';
+export const BOARD_RESOURCE_URI = 'ui://worker-session-bridge/worker-board';
 
 export interface BridgeDeps {
   manager: WorkerManager;
@@ -379,7 +379,7 @@ export function createServer(deps: BridgeDeps): McpServer {
     {
       title: 'Bridge Status',
       description:
-        'Reports the current status of agent-session-bridge: runtime connectivity, ' +
+        'Reports the current status of worker-session-bridge: runtime connectivity, ' +
         'orchestration availability, and managed worker count.',
       outputSchema: bridgeStatusSchema,
     },

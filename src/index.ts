@@ -10,11 +10,11 @@ import { SessionRegistry } from './storage/sessionRegistry.js';
 import { TaskStore } from './storage/taskStore.js';
 import { WorkerManager } from './workers/workerManager.js';
 
-// Data dir: ~/.agent-session-bridge by default, overridable via env. A
+// Data dir: ~/.worker-session-bridge by default, overridable via env. A
 // package-relative default would lose state under npx caches and global
 // installs.
 const dataDir =
-  process.env.AGENT_SESSION_BRIDGE_DATA_DIR ?? join(homedir(), '.agent-session-bridge');
+  process.env.WORKER_SESSION_BRIDGE_DATA_DIR ?? join(homedir(), '.worker-session-bridge');
 const registryPath = join(dataDir, 'workers.json');
 const taskStorePath = join(dataDir, 'tasks.json');
 
@@ -24,7 +24,7 @@ try {
 } catch (error) {
   // Corrupted registry is fatal — never silently drop managed workers.
   console.error(
-    `[agent-session-bridge] cannot start: ${error instanceof Error ? error.message : String(error)}`,
+    `[worker-session-bridge] cannot start: ${error instanceof Error ? error.message : String(error)}`,
   );
   process.exit(2);
 }
@@ -35,7 +35,7 @@ try {
 } catch (error) {
   // Corrupted task history is fatal — never silently drop completed results.
   console.error(
-    `[agent-session-bridge] cannot start: ${error instanceof Error ? error.message : String(error)}`,
+    `[worker-session-bridge] cannot start: ${error instanceof Error ? error.message : String(error)}`,
   );
   process.exit(2);
 }
@@ -60,8 +60,8 @@ function readRuntimeDefaultModel(): string | undefined {
   return undefined;
 }
 
-const codexPathOverride = process.env.AGENT_SESSION_BRIDGE_CODEX_PATH;
-const defaultModel = process.env.AGENT_SESSION_BRIDGE_MODEL;
+const codexPathOverride = process.env.WORKER_SESSION_BRIDGE_CODEX_PATH;
+const defaultModel = process.env.WORKER_SESSION_BRIDGE_MODEL;
 const adapter = new CodexRuntimeAdapter({
   ...(codexPathOverride ? { codexOptions: { codexPathOverride } } : {}),
   ...(defaultModel ? { model: defaultModel } : {}),
@@ -72,11 +72,11 @@ try {
   // Binary missing/unusable: the server still starts — tools report
   // RUNTIME_UNAVAILABLE and bridge_status shows runtimeConnected=false.
   console.error(
-    `[agent-session-bridge] codex runtime unavailable: ${error instanceof Error ? error.message : String(error)}`,
+    `[worker-session-bridge] codex runtime unavailable: ${error instanceof Error ? error.message : String(error)}`,
   );
 }
 
-const maxBatchTasks = Number(process.env.AGENT_SESSION_BRIDGE_MAX_BATCH_TASKS ?? '');
+const maxBatchTasks = Number(process.env.WORKER_SESSION_BRIDGE_MAX_BATCH_TASKS ?? '');
 const runtimeDefaultModel = readRuntimeDefaultModel();
 const manager = new WorkerManager({
   registry,
@@ -88,12 +88,12 @@ const manager = new WorkerManager({
 
 const handle = serveStdio(() => createServer({ manager, adapter, registry }), {
   onerror(error) {
-    console.error('[agent-session-bridge] transport error:', error);
+    console.error('[worker-session-bridge] transport error:', error);
   },
 });
 
 console.error(
-  `[agent-session-bridge] MCP server listening on stdio (registry: ${registryPath}, tasks: ${taskStorePath}, runtime ${adapter.isConnected() ? 'connected' : 'unavailable'})`,
+  `[worker-session-bridge] MCP server listening on stdio (registry: ${registryPath}, tasks: ${taskStorePath}, runtime ${adapter.isConnected() ? 'connected' : 'unavailable'})`,
 );
 
 // In-flight async tasks are marked unknown and are not resumed. A closed

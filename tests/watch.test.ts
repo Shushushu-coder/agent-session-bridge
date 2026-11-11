@@ -11,7 +11,7 @@ import { extractLines, readTailLines, RolloutTail } from '../src/watch/rolloutTa
 let dir: string;
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'asb-watch-'));
+  dir = await mkdtemp(join(tmpdir(), 'wsb-watch-'));
 });
 
 afterEach(async () => {

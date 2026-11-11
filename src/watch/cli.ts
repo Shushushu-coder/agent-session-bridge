@@ -19,7 +19,7 @@ import { readTailLines, RolloutTail } from './rolloutTail.js';
  */
 
 const defaultDataDir =
-  process.env.AGENT_SESSION_BRIDGE_DATA_DIR ?? join(homedir(), '.agent-session-bridge');
+  process.env.WORKER_SESSION_BRIDGE_DATA_DIR ?? join(homedir(), '.worker-session-bridge');
 
 interface Args {
   follow: string | undefined;
@@ -63,17 +63,17 @@ function parseArgs(argv: string[]): Args {
   return args;
 }
 
-const HELP = `agent-session-bridge watch — live worker observer (read-only)
+const HELP = `worker-session-bridge watch — live worker observer (read-only)
 
 Usage:
-  agent-session-bridge-watch                          status board for all workers
-  agent-session-bridge-watch --follow <id|name>       live message stream for one worker
-  agent-session-bridge-watch --once                   print the board once and exit
+  worker-session-bridge-watch                          status board for all workers
+  worker-session-bridge-watch --follow <id|name>       live message stream for one worker
+  worker-session-bridge-watch --once                   print the board once and exit
   (from a source checkout: npm run watch [-- ...])
 
 Options:
   --follow <workerId|name>   tail that worker's Codex rollout file
-  --dir <path>               bridge data dir (default: ~/.agent-session-bridge or env)
+  --dir <path>               bridge data dir (default: ~/.worker-session-bridge or env)
   --codex-home <path>        rollout root (default: ~/.codex/sessions)
   --interval <ms>            board refresh interval (default 500)
   --lines <n>                backfill lines in follow mode (default 40)

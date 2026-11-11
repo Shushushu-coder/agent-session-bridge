@@ -46,7 +46,7 @@ function task(overrides: Partial<WorkerTask> = {}): WorkerTask {
 }
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'asb-tasks-'));
+  dir = await mkdtemp(join(tmpdir(), 'wsb-tasks-'));
   file = join(dir, 'tasks.json');
 });
 

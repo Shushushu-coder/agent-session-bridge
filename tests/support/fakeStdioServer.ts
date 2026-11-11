@@ -11,16 +11,16 @@ import { TaskStore } from '../../src/storage/taskStore.js';
 import { WorkerManager } from '../../src/workers/workerManager.js';
 import { FakeRuntimeAdapter } from '../helpers/fakes.js';
 
-const dataDir = process.env.AGENT_SESSION_BRIDGE_DATA_DIR;
+const dataDir = process.env.WORKER_SESSION_BRIDGE_DATA_DIR;
 if (!dataDir) {
-  console.error('[fake-stdio] AGENT_SESSION_BRIDGE_DATA_DIR is required');
+  console.error('[fake-stdio] WORKER_SESSION_BRIDGE_DATA_DIR is required');
   process.exit(2);
 }
 
 const registry = await SessionRegistry.open(join(dataDir, 'workers.json'));
 const taskStore = await TaskStore.open(join(dataDir, 'tasks.json'));
 const adapter = new FakeRuntimeAdapter();
-adapter.streamDelayMs = Number(process.env.AGENT_SESSION_BRIDGE_STREAM_DELAY_MS ?? '0');
+adapter.streamDelayMs = Number(process.env.WORKER_SESSION_BRIDGE_STREAM_DELAY_MS ?? '0');
 const manager = new WorkerManager({
   registry,
   taskStore,

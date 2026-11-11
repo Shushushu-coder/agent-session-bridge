@@ -1,5 +1,5 @@
 {
-  "name": "@shushushu-coder/agent-session-bridge",
+  "name": "worker-session-bridge",
   "version": "0.4.0",
   "description": "Lightweight local MCP server bridging Codex main sessions to persistent Codex worker sessions.",
   "type": "module",
@@ -8,16 +8,13 @@
   },
   "main": "dist/index.js",
   "bin": {
-    "agent-session-bridge": "dist/index.js",
-    "agent-session-bridge-watch": "dist/watch/cli.js"
+    "worker-session-bridge": "dist/index.js",
+    "worker-session-bridge-watch": "dist/watch/cli.js"
   },
   "files": [
     "dist"
   ],
-  "publishConfig": {
-    "access": "public"
-  },
-  "mcpName": "io.github.shushushu-coder/agent-session-bridge",
+  "mcpName": "io.github.shushushu-coder/worker-session-bridge",
   "scripts": {
     "dev": "npm run build:ui && tsx src/index.ts",
     "build": "npm run build:ui && tsc -p tsconfig.build.json",
@@ -37,10 +34,10 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Shushushu-coder/agent-session-bridge.git"
+    "url": "git+https://github.com/Shushushu-coder/worker-session-bridge.git"
   },
-  "bugs": "https://github.com/Shushushu-coder/agent-session-bridge/issues",
-  "homepage": "https://github.com/Shushushu-coder/agent-session-bridge#readme",
+  "bugs": "https://github.com/Shushushu-coder/worker-session-bridge/issues",
+  "homepage": "https://github.com/Shushushu-coder/worker-session-bridge#readme",
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/ext-apps": "^2.0.4",

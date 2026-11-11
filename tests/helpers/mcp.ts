@@ -23,7 +23,7 @@ export async function createTestStack(
   adapter: AgentRuntimeAdapter,
   verifyWorkspace: WorkspaceVerifier = passThrough,
 ): Promise<TestStack> {
-  const dataDir = await mkdtemp(join(tmpdir(), 'asb-mcp-'));
+  const dataDir = await mkdtemp(join(tmpdir(), 'wsb-mcp-'));
   const registry = await SessionRegistry.open(join(dataDir, 'workers.json'));
   const taskStore = await TaskStore.open(join(dataDir, 'tasks.json'));
   const manager = new WorkerManager({ registry, taskStore, adapter, verifyWorkspace });

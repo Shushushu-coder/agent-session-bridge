@@ -29,7 +29,7 @@ function record(overrides: Partial<WorkerRecord> = {}): WorkerRecord {
 }
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'asb-registry-'));
+  dir = await mkdtemp(join(tmpdir(), 'wsb-registry-'));
   file = join(dir, 'workers.json');
 });
 

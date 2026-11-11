@@ -1486,7 +1486,7 @@ export class WorkerManager {
 
   /**
    * Resolution order: worker-pinned model → adapter default
-   * (AGENT_SESSION_BRIDGE_MODEL) → runtime default. `null` means the
+   * (WORKER_SESSION_BRIDGE_MODEL) → runtime default. `null` means the
    * bridge requests nothing and the runtime picks; it is never a guess
    * about what the runtime actually ran.
    */

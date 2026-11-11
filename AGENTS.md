@@ -1,12 +1,12 @@
-# AGENTS.md — Agent Working Guidelines for agent-session-bridge
+# AGENTS.md — Agent Working Guidelines for worker-session-bridge
 
-> 本文件是所有参与 `agent-session-bridge` 仓库开发、维护与调试的 AI Agent 必须遵守的准则与技术上下文。
+> 本文件是所有参与 `worker-session-bridge` 仓库开发、维护与调试的 AI Agent 必须遵守的准则与技术上下文。
 
 ---
 
 ## 1. 项目定位与核心设计哲学
 
-`agent-session-bridge` 是一个基于 stdio 的轻量级本地 MCP (Model Context Protocol) 服务端，它允许 Codex 主会话通过标准的 MCP 工具，创建、调度和管理**持久化的 Codex Worker 会话**（基于 `@openai/codex-sdk` 与 Node.js ≥ 22 ESM）。
+`worker-session-bridge` 是一个基于 stdio 的轻量级本地 MCP (Model Context Protocol) 服务端，它允许 Codex 主会话通过标准的 MCP 工具，创建、调度和管理**持久化的 Codex Worker 会话**（基于 `@openai/codex-sdk` 与 Node.js ≥ 22 ESM）。
 
 ### 核心设计哲学
 1. **Honest State Machine（诚实状态机）**：绝不粉饰状态或伪造返回。失败即报失败，未就绪即报 `NOT_READY`，中断即标记为 `unknown`。未收到模型终态事件前绝不伪造成功结果。
@@ -61,7 +61,7 @@ docs/                      # architecture.md、roadmap.md 与设计报告
 ```
 
 ### 数据目录
-默认 `~/.agent-session-bridge/`（包安装目录不可作为持久位置——npx 缓存与全局目录会在升级/清理时丢状态），可用 `AGENT_SESSION_BRIDGE_DATA_DIR` 覆盖；源码 checkout 里 gitignored 的 `sessions/` 仅为历史默认。调试持久化状态时先看这里：`workers.json` 存 Worker 元数据，`tasks.json` 存任务状态/进度摘要/最终回复/token 用量与不可变的 batch→task 映射。
+默认 `~/.worker-session-bridge/`（包安装目录不可作为持久位置——npx 缓存与全局目录会在升级/清理时丢状态），可用 `WORKER_SESSION_BRIDGE_DATA_DIR` 覆盖；源码 checkout 里 gitignored 的 `sessions/` 仅为历史默认。调试持久化状态时先看这里：`workers.json` 存 Worker 元数据，`tasks.json` 存任务状态/进度摘要/最终回复/token 用量与不可变的 batch→task 映射。
 
 全部 13 个 MCP 工具的清单与语义见 `README.md`（"MCP tools" 表及 board/watch 章节）；新增或修改工具时请保持 README 同步。
 
@@ -105,5 +105,5 @@ npm run smoke
    - 遵循 Node.js 原生 ESM 模式，采用 TypeScript 严格模式，避免使用 `any`。
    - 优先复用 `src/contracts/` 中已定义的 Zod schema 和类型，新增状态或字段时同步更新对应 contract。
 5. **环境变量与调试**：
-   - 可用环境变量：`AGENT_SESSION_BRIDGE_DATA_DIR`、`AGENT_SESSION_BRIDGE_CODEX_PATH`、`AGENT_SESSION_BRIDGE_MODEL`、`AGENT_SESSION_BRIDGE_MAX_BATCH_TASKS`（详见 README "Environment variables"）。
+   - 可用环境变量：`WORKER_SESSION_BRIDGE_DATA_DIR`、`WORKER_SESSION_BRIDGE_CODEX_PATH`、`WORKER_SESSION_BRIDGE_MODEL`、`WORKER_SESSION_BRIDGE_MAX_BATCH_TASKS`（详见 README "Environment variables"）。
    - 代码改动要在已加载本 server 的 Codex Desktop 中生效，需重启 MCP 进程：杀掉 node 进程无效（stdio transport 不会重连），正确做法是请用户在 `~/.codex/config.toml` 的对应 `[mcp_servers.*]` 条目切换 `enabled` false→true——按红线约定，Agent 不应代改该文件。

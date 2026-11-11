@@ -34,7 +34,7 @@ let fakeExe: string;
 
 async function ensureFakeBuilt(): Promise<void> {
   if (fakeExe) return;
-  workDir = await mkdtemp(join(tmpdir(), 'asb-e2e-'));
+  workDir = await mkdtemp(join(tmpdir(), 'wsb-e2e-'));
   fakeExe = join(workDir, 'fake-codex.exe');
   await execFileAsync(csc!, ['/nologo', '/target:exe', `/out:${fakeExe}`, FIXTURE], {
     timeout: 60_000,
@@ -102,8 +102,8 @@ describe.skipIf(!RUN)('codex exec E2E via fake CLI (offline, no model)', () => {
       const argvLog = join(workDir, 'argv-server.jsonl');
       const env = {
         ...process.env,
-        AGENT_SESSION_BRIDGE_DATA_DIR: dataDir,
-        AGENT_SESSION_BRIDGE_CODEX_PATH: fakeExe,
+        WORKER_SESSION_BRIDGE_DATA_DIR: dataDir,
+        WORKER_SESSION_BRIDGE_CODEX_PATH: fakeExe,
         FAKE_CODEX_LOG: argvLog,
       } as Record<string, string>;
 
@@ -188,8 +188,8 @@ describe.skipIf(!RUN)('codex exec E2E via fake CLI (offline, no model)', () => {
       const dataDir = join(workDir, 'data-fail');
       const env = {
         ...process.env,
-        AGENT_SESSION_BRIDGE_DATA_DIR: dataDir,
-        AGENT_SESSION_BRIDGE_CODEX_PATH: fakeExe,
+        WORKER_SESSION_BRIDGE_DATA_DIR: dataDir,
+        WORKER_SESSION_BRIDGE_CODEX_PATH: fakeExe,
         FAKE_CODEX_FAIL: '1',
       } as Record<string, string>;
       const transport = new StdioClientTransport({

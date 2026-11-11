@@ -42,7 +42,7 @@ async function makeManager(maxBatchTasks?: number): Promise<WorkerManager> {
 }
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'asb-batch-'));
+  dir = await mkdtemp(join(tmpdir(), 'wsb-batch-'));
   registry = await SessionRegistry.open(join(dir, 'workers.json'));
   taskStore = await TaskStore.open(join(dir, 'tasks.json'));
   adapter = new FakeRuntimeAdapter();

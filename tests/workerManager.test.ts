@@ -42,7 +42,7 @@ function failedResult(externalSessionId?: string): TaskResult {
 }
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'asb-manager-'));
+  dir = await mkdtemp(join(tmpdir(), 'wsb-manager-'));
   registryFile = join(dir, 'workers.json');
   registry = await SessionRegistry.open(registryFile);
   taskStore = await TaskStore.open(join(dir, 'tasks.json'));

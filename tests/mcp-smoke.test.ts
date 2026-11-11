@@ -16,7 +16,7 @@ const SERVER_ENTRY = fileURLToPath(new URL('../dist/index.js', import.meta.url))
 const tempDirs: string[] = [];
 
 async function tempDataDir(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), 'asb-smoke-'));
+  const dir = await mkdtemp(join(tmpdir(), 'wsb-smoke-'));
   tempDirs.push(dir);
   return dir;
 }
@@ -65,7 +65,7 @@ async function spawnProcess(
     stderr: 'pipe',
     env: {
       ...process.env,
-      AGENT_SESSION_BRIDGE_DATA_DIR: dataDir,
+      WORKER_SESSION_BRIDGE_DATA_DIR: dataDir,
       ...extraEnv,
     } as Record<string, string>,
   });
@@ -113,7 +113,7 @@ describe('MCP stdio smoke test', () => {
         const result = await client.callTool({ name: 'bridge_status', arguments: {} });
         expect(result.isError).toBeFalsy();
         expect(result.structuredContent).toMatchObject({
-          name: 'agent-session-bridge',
+          name: 'worker-session-bridge',
           runtime: 'codex',
           sessionOrchestrationAvailable: true,
           managedWorkers: 0,
@@ -145,7 +145,7 @@ describe('MCP stdio smoke test', () => {
               name: 'restored',
               runtime: 'codex',
               threadId: 'thread_from_past_life',
-              workspacePath: 'E:\\Projects\\agent-session-bridge',
+              workspacePath: 'E:\\Projects\\worker-session-bridge',
               state: 'ready',
               createdAt: now,
               updatedAt: now,
@@ -210,7 +210,7 @@ describe('MCP stdio smoke test', () => {
               name: 'restored',
               runtime: 'codex',
               threadId: 'thread_from_past_life',
-              workspacePath: 'E:\\Projects\\agent-session-bridge',
+              workspacePath: 'E:\\Projects\\worker-session-bridge',
               state: 'ready',
               createdAt: now,
               updatedAt: now,
@@ -301,7 +301,7 @@ describe('MCP stdio smoke test', () => {
     { timeout: 30000 },
     async () => {
       const dataDir = await tempDataDir();
-      const first = await spawnFakeServer(dataDir, { AGENT_SESSION_BRIDGE_STREAM_DELAY_MS: '200' });
+      const first = await spawnFakeServer(dataDir, { WORKER_SESSION_BRIDGE_STREAM_DELAY_MS: '200' });
       let taskId = '';
       try {
         const created = await first.client.callTool({
@@ -366,7 +366,7 @@ describe('MCP stdio smoke test', () => {
     async () => {
       const dataDir = await tempDataDir();
       const server = await spawnFakeServer(dataDir, {
-        AGENT_SESSION_BRIDGE_STREAM_DELAY_MS: '150',
+        WORKER_SESSION_BRIDGE_STREAM_DELAY_MS: '150',
       });
       try {
         const workerIds: string[] = [];
@@ -441,7 +441,7 @@ describe('MCP stdio smoke test', () => {
               name: 'restored',
               runtime: 'codex',
               threadId: 'thread_from_past_life',
-              workspacePath: 'E:\\Projects\\agent-session-bridge',
+              workspacePath: 'E:\\Projects\\worker-session-bridge',
               state: 'ready',
               createdAt: now,
               updatedAt: now,
@@ -542,7 +542,7 @@ describe('MCP stdio smoke test', () => {
     { timeout: 30000 },
     async () => {
       const dataDir = await tempDataDir();
-      const server = await spawnFakeServer(dataDir, { AGENT_SESSION_BRIDGE_STREAM_DELAY_MS: '5000' });
+      const server = await spawnFakeServer(dataDir, { WORKER_SESSION_BRIDGE_STREAM_DELAY_MS: '5000' });
       const created = await server.client.callTool({
         name: 'create_worker',
         arguments: { name: 'proc', workspacePath: 'E:\\ws' },

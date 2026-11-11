@@ -1,4 +1,4 @@
-# Agent Session Bridge
+# Worker Session Bridge
 
 A lightweight local MCP server that lets a Codex main session create,
 message, and resume **persistent Codex worker sessions** through standard
@@ -81,7 +81,7 @@ The per-member `dispatchStatus` records the dispatch-time truth:
 `WORKER_NOT_FOUND`, `REQUEST_KEY_CONFLICT`, ...). A batch is **not** a
 transaction — accepted tasks keep running and remain queryable when siblings
 were rejected. One batch dispatches at most `maxBatchTasks` members (default
-3, `AGENT_SESSION_BRIDGE_MAX_BATCH_TASKS`); a repeated `workerId` is always
+3, `WORKER_SESSION_BRIDGE_MAX_BATCH_TASKS`); a repeated `workerId` is always
 rejected because a worker still runs at most one turn at a time.
 
 The batch record is immutable once written. Replaying the identical request
@@ -113,7 +113,7 @@ batch are reported in `tasks[]`, not as call errors.
 
 `list_workers` / `get_worker` report `effectiveModel` and `modelSource`:
 the model the next turn will request, resolved worker `model` →
-`AGENT_SESSION_BRIDGE_MODEL` → runtime default (`effectiveModel: null`
+`WORKER_SESSION_BRIDGE_MODEL` → runtime default (`effectiveModel: null`
 with `modelSource: "runtime_default"` — the bridge does not know Codex's
 own default). Each task records the `requestedModel` it was dispatched
 with, so status/result views show what was asked for. These are
@@ -183,15 +183,15 @@ the server, does not keep the turn running.
 
 - Node.js ≥ 22, npm, Git
 - Codex CLI — the SDK resolves the `@openai/codex` vendored binary
-  automatically (or point `AGENT_SESSION_BRIDGE_CODEX_PATH` at a binary)
+  automatically (or point `WORKER_SESSION_BRIDGE_CODEX_PATH` at a binary)
 
 ## Install
 
 From npm:
 
 ```sh
-npm install -g @shushushu-coder/agent-session-bridge   # provides `agent-session-bridge` + `agent-session-bridge-watch`
-npx -y @shushushu-coder/agent-session-bridge           # or run the stdio server straight from the registry
+npm install -g worker-session-bridge   # provides `worker-session-bridge` + `worker-session-bridge-watch`
+npx -y worker-session-bridge           # or run the stdio server straight from the registry
 ```
 
 From source:
@@ -217,15 +217,15 @@ npm install && npm run build          # server entry: dist/index.js
 
 A read-only terminal observer for managed workers — useful while Codex
 Desktop is busy and its sidebar cannot show externally created threads.
-Installed from npm it is the `agent-session-bridge-watch` binary; from a
+Installed from npm it is the `worker-session-bridge-watch` binary; from a
 source checkout it is `npm run watch`:
 
 ```sh
-agent-session-bridge-watch                          # status board for all workers
-agent-session-bridge-watch --follow w-a             # live message stream of one worker
-agent-session-bridge-watch --follow wrk_cf96...     # workerId also works
-agent-session-bridge-watch --once                   # print the board once and exit
-agent-session-bridge-watch --help                   # all options (--dir, --codex-home, --interval, --lines)
+worker-session-bridge-watch                          # status board for all workers
+worker-session-bridge-watch --follow w-a             # live message stream of one worker
+worker-session-bridge-watch --follow wrk_cf96...     # workerId also works
+worker-session-bridge-watch --once                   # print the board once and exit
+worker-session-bridge-watch --help                   # all options (--dir, --codex-home, --interval, --lines)
 ```
 
 The board polls `workers.json` + `tasks.json` (~500 ms) and shows per
@@ -276,7 +276,7 @@ apps = true
 The HTML view is generated from `src/ui/` (`npm run build:ui`, chained
 into `dev`/`build`/`test`/`typecheck`) and served as the
 `text/html;profile=mcp-app` resource
-`ui://agent-session-bridge/worker-board`.
+`ui://worker-session-bridge/worker-board`.
 
 All tests are offline: no real Codex model call is ever made. The
 `codex exec` path is exercised against a fake compiled binary
@@ -287,14 +287,14 @@ compiler is present.
 
 | Variable                            | Purpose                                        |
 | ----------------------------------- | ---------------------------------------------- |
-| `AGENT_SESSION_BRIDGE_DATA_DIR`     | Data directory for `workers.json` and `tasks.json` (default `~/.agent-session-bridge`) |
-| `AGENT_SESSION_BRIDGE_CODEX_PATH`   | Codex binary override (`codexPathOverride`)    |
-| `AGENT_SESSION_BRIDGE_MODEL`        | Bridge-level default model for workers without one (`modelSource: "bridge_default"`) |
-| `AGENT_SESSION_BRIDGE_MAX_BATCH_TASKS` | Max tasks a batch may dispatch (default 3)  |
+| `WORKER_SESSION_BRIDGE_DATA_DIR`     | Data directory for `workers.json` and `tasks.json` (default `~/.worker-session-bridge`) |
+| `WORKER_SESSION_BRIDGE_CODEX_PATH`   | Codex binary override (`codexPathOverride`)    |
+| `WORKER_SESSION_BRIDGE_MODEL`        | Bridge-level default model for workers without one (`modelSource: "bridge_default"`) |
+| `WORKER_SESSION_BRIDGE_MAX_BATCH_TASKS` | Max tasks a batch may dispatch (default 3)  |
 
-The default data directory is `~/.agent-session-bridge` so state survives
+The default data directory is `~/.worker-session-bridge` so state survives
 `npx` cache cleanups and package upgrades; point
-`AGENT_SESSION_BRIDGE_DATA_DIR` elsewhere (e.g. a checkout-local
+`WORKER_SESSION_BRIDGE_DATA_DIR` elsewhere (e.g. a checkout-local
 `sessions/`) to relocate it. `workers.json` stores worker metadata.
 `tasks.json` stores task status, a short progress summary, the final reply,
 token usage, and the immutable batch→task mapping. Neither file stores
@@ -311,12 +311,12 @@ The bridge does **not** touch your Codex configuration. To let Codex see
 this server, add an entry like this to `~/.codex/config.toml` yourself:
 
 ```toml
-[mcp_servers.agent-session-bridge]
-command = "agent-session-bridge"          # npm-installed bin on PATH
+[mcp_servers.worker-session-bridge]
+command = "worker-session-bridge"          # npm-installed bin on PATH
 ```
 
 Prefer not to install globally? Use `command = "npx"` with
-`args = ["-y", "@shushushu-coder/agent-session-bridge"]`. From a source checkout use
+`args = ["-y", "worker-session-bridge"]`. From a source checkout use
 `command = "node"` with `args = ["<repo>/dist/index.js"]`.
 
 To reload the bridge after changing its code **without restarting Codex

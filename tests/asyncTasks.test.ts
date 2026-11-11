@@ -40,7 +40,7 @@ async function waitFor(predicate: () => boolean, label: string): Promise<void> {
 }
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'asb-async-'));
+  dir = await mkdtemp(join(tmpdir(), 'wsb-async-'));
   registry = await SessionRegistry.open(join(dir, 'workers.json'));
   taskStore = await TaskStore.open(join(dir, 'tasks.json'));
   adapter = new FakeRuntimeAdapter();

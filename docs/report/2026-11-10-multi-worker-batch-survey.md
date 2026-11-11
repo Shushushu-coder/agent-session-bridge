@@ -133,7 +133,7 @@ Tailwind + better-sqlite3 (WAL) + Drizzle ORM；核心约束为回环
 - 任务跑在 MCP server 进程内，非后台 daemon；server 退出则
   in-flight 任务恢复为 `unknown`，不自动续跑。
 - 每 worker 同时最多一个 turn，无队列；batch 默认上限 3
-  （`AGENT_SESSION_BRIDGE_MAX_BATCH_TASKS` 可调）。
+  （`WORKER_SESSION_BRIDGE_MAX_BATCH_TASKS` 可调）。
 
 ## 九、后续可做
 

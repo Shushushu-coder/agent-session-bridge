@@ -18,7 +18,7 @@ const BAR_CLASS: Record<string, string> = {
   unknown: 'unk',
 };
 const root = document.getElementById('app')!;
-const app = new App({ name: 'agent-session-bridge-board', version: '0.8.0' });
+const app = new App({ name: 'worker-session-bridge-board', version: '0.8.0' });
 
 let timer: ReturnType<typeof setInterval> | null = null;
 let lastError: string | null = null;
